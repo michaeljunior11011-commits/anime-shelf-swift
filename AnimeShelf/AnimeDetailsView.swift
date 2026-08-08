@@ -88,7 +88,7 @@ struct AnimeDetailsView: View {
                 .buttonStyle(.plain)
             }
             .padding(13)
-            .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .animeGlass(cornerRadius: 16, interactive: true)
         }
         .buttonStyle(.plain)
     }
@@ -102,4 +102,3 @@ struct AnimeDetailsView: View {
         isLoading = false
     }
 }
-

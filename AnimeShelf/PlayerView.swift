@@ -87,7 +87,7 @@ struct PlayerView: View {
                     Button("التعليقات", systemImage: "text.bubble.fill") {
                         showComments = true
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                 }
                 .padding(.horizontal)
 
@@ -108,4 +108,3 @@ struct PlayerView: View {
         .sheet(isPresented: $showComments) { CommentsView(episodeID: episode.id) }
     }
 }
-

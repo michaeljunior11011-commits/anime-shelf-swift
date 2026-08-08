@@ -62,6 +62,8 @@ struct HomeView: View {
             Image(systemName: "play.square.stack.fill")
                 .font(.system(size: 34))
                 .foregroundStyle(.cyan)
+                .padding(11)
+                .glassEffect(.regular.tint(.cyan.opacity(0.2)).interactive(), in: Circle())
         }
         .padding(.horizontal, 18)
         .padding(.top, 16)
@@ -106,8 +108,7 @@ struct HomeView: View {
     }
 
     private func sectionTitle(_ title: String, icon: String) -> some View {
-        Label(title, systemImage: icon)
-            .font(.title3.bold())
+        GlassSectionTitle(title: title, icon: icon)
             .padding(.horizontal, 18)
     }
 }
@@ -187,6 +188,7 @@ private struct ContinueCard: View {
             }
             .frame(width: 315, height: 205)
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .glassEffect(.regular.tint(.cyan.opacity(0.08)).interactive(), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
         .buttonStyle(.plain)
     }
