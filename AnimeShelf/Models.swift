@@ -1,6 +1,6 @@
 import Foundation
 
-struct Anime: Codable, Identifiable, Hashable {
+struct Anime: Codable, Identifiable, Hashable, Sendable {
     let id: String
     let name: String
     let type: String?
@@ -115,4 +115,3 @@ enum TimeFormatter {
         return String(format: "%02d:%02d:%02d.%03d", hours, minutes, secs, milliseconds)
     }
 }
-

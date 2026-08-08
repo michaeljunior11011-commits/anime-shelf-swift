@@ -3,6 +3,7 @@ import SwiftUI
 struct HomeView: View {
     @StateObject private var model = HomeViewModel()
     @EnvironmentObject private var progressStore: WatchProgressStore
+    @State private var showSearch = false
 
     var body: some View {
         NavigationStack {
@@ -18,20 +19,10 @@ struct HomeView: View {
                     LazyVStack(alignment: .leading, spacing: 28) {
                         header
                         continueWatching
-                        animeSection("الحلقات الجديدة", icon: "sparkles", items: model.latest)
-                        animeSection("الأنميات المستمرة", icon: "dot.radiowaves.left.and.right", items: model.ongoing)
-                        animeSection("الأنميات المكتملة", icon: "checkmark.seal.fill", items: model.completed)
-                        animeSection("الأكثر شهرة", icon: "flame.fill", items: model.popular)
-
-                        if let message = model.errorMessage {
-                            ContentUnavailableView(
-                                "تعذر تحميل القائمة",
-                                systemImage: "wifi.exclamationmark",
-                                description: Text(message)
-                            )
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 40)
-                        }
+                        animeSection("الحلقات الجديدة", icon: "sparkles", items: model.latest, section: .latest)
+                        animeSection("الأنميات المستمرة", icon: "dot.radiowaves.left.and.right", items: model.ongoing, section: .ongoing)
+                        animeSection("الأنميات المكتملة", icon: "checkmark.seal.fill", items: model.completed, section: .completed)
+                        animeSection("الأكثر شهرة", icon: "flame.fill", items: model.popular, section: .popular)
                     }
                     .padding(.bottom, 40)
                 }
@@ -44,6 +35,10 @@ struct HomeView: View {
             }
             .toolbar(.hidden, for: .navigationBar)
             .task { await model.load() }
+            .sheet(isPresented: $showSearch) {
+                SearchView()
+                    .environmentObject(progressStore)
+            }
         }
         .tint(Color(red: 0.32, green: 0.77, blue: 0.94))
     }
@@ -59,11 +54,17 @@ struct HomeView: View {
                     .font(.largeTitle.bold())
             }
             Spacer()
-            Image(systemName: "play.square.stack.fill")
-                .font(.system(size: 34))
-                .foregroundStyle(.cyan)
-                .padding(11)
-                .glassEffect(.regular.tint(.cyan.opacity(0.2)).interactive(), in: Circle())
+            Button {
+                showSearch = true
+            } label: {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundStyle(.cyan)
+                    .padding(13)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.tint(.cyan.opacity(0.2)).interactive(), in: Circle())
+            .accessibilityLabel("بحث عن أنمي")
         }
         .padding(.horizontal, 18)
         .padding(.top, 16)
@@ -87,23 +88,35 @@ struct HomeView: View {
         }
     }
 
-    private func animeSection(_ title: String, icon: String, items: [Anime]) -> some View {
+    private func animeSection(_ title: String, icon: String, items: [Anime], section: HomeSection) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle(title, icon: icon)
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 13) {
-                    ForEach(items) { anime in
-                        NavigationLink(value: anime) {
-                            AnimeCard(anime: anime)
-                        }
-                        .buttonStyle(.plain)
-                    }
+            if items.isEmpty && model.failedSections.contains(section) {
+                Button {
+                    Task { await model.load() }
+                } label: {
+                    Label("تعذر تحميل هذا القسم — اضغط للمحاولة", systemImage: "arrow.clockwise")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(14)
+                        .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.glass)
                 .padding(.horizontal, 18)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 13) {
+                        ForEach(items) { anime in
+                            NavigationLink {
+                                AnimeDetailsView(anime: anime)
+                            } label: {
+                                AnimeCard(anime: anime)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 18)
+                }
             }
-        }
-        .navigationDestination(for: Anime.self) { anime in
-            AnimeDetailsView(anime: anime)
         }
     }
 
