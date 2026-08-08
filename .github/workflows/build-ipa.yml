@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -53,4 +53,3 @@ jobs:
             --title "Anime Shelf build ${GITHUB_RUN_NUMBER}" \
             --notes "Unsigned iOS IPA. Sign it with your Apple ID using AltStore or Sideloadly before installing." \
             --latest
-
