@@ -68,9 +68,11 @@ actor VideoResolver {
         let (data, response) = try await session.data(for: request)
         try validate(response, data: data)
         let videos = try JSONDecoder().decode([ResolvedVideo].self, from: data)
-        return videos.first(where: { $0.file.lastPathComponent == "h.mp4" })?.file
-            ?? videos.last?.file
-            ?? { throw ServiceError.noVideo }()
+        guard let selected = videos.first(where: { $0.file.lastPathComponent == "h.mp4" })?.file
+            ?? videos.last?.file else {
+            throw ServiceError.noVideo
+        }
+        return selected
     }
 
     private func validate(_ response: URLResponse, data: Data) throws {
@@ -79,4 +81,3 @@ actor VideoResolver {
         }
     }
 }
-
