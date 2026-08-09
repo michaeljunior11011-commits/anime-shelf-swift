@@ -11,7 +11,7 @@ struct Anime: Codable, Identifiable, Hashable, Sendable {
     let genres: String?
     let coverURL: URL?
     let fullCoverURL: URL?
-    let bannerURL: URL?
+    var bannerURL: URL?
     let synopsis: String?
     let englishTitle: String?
     let latestEpisodeID: String?
@@ -221,7 +221,7 @@ struct WatchRecord: Codable, Identifiable, Hashable, Sendable {
     let animeID: String
     let animeName: String
     let coverURL: URL?
-    let bannerURL: URL?
+    var bannerURL: URL?
     let episodeNumber: String
     var seconds: Double
     var duration: Double
