@@ -53,7 +53,7 @@ jobs:
           raise SystemExit("No available iPhone simulator")
           ')
           xcrun simctl boot "$SIMULATOR_ID" 2>/dev/null || true
-          xcrun simctl bootstatus "$SIMULATOR_ID" -b
+          sleep 6
           xcodebuild \
             -project AnimeShelf.xcodeproj \
             -scheme AnimeShelf \
