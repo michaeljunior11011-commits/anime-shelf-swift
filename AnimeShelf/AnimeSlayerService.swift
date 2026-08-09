@@ -5,48 +5,94 @@ actor AnimeSlayerService {
     private let session: URLSession
     private let decoder = JSONDecoder()
 
-    init(session: URLSession = .shared) {
-        self.session = session
+    init(session: URLSession? = nil) {
+        if let session {
+            self.session = session
+        } else {
+            let configuration = URLSessionConfiguration.default
+            configuration.waitsForConnectivity = true
+            configuration.timeoutIntervalForRequest = 20
+            configuration.timeoutIntervalForResource = 60
+            configuration.urlCache = URLCache(
+                memoryCapacity: 16 * 1_024 * 1_024,
+                diskCapacity: 80 * 1_024 * 1_024
+            )
+            self.session = URLSession(configuration: configuration)
+        }
     }
 
-    func animeList(type: String, extra: [String: Any] = [:], limit: Int = 18) async throws -> [Anime] {
+    func animeList(
+        type: String,
+        extra: [String: Any] = [:],
+        offset: Int = 0,
+        limit: Int = 18,
+        orderBy: String = "latest_first"
+    ) async throws -> [Anime] {
         var payload: [String: Any] = [
             "list_type": type,
-            "_offset": 0,
+            "_offset": offset,
             "_limit": limit,
-            "_order_by": "latest_first"
+            "_order_by": orderBy
         ]
         extra.forEach { payload[$0.key] = $0.value }
-        let url = try endpoint("animes/get-published-animes", json: payload)
-        var request = URLRequest(url: url)
-        request.addAnimeClientHeaders()
-        let (data, response) = try await session.data(for: request)
-        try validate(response, data: data)
-        return try decoder.decode(APIEnvelope<AnimePage>.self, from: data).response.data
+        let url = try jsonEndpoint("animes/get-published-animes", json: payload)
+        return try await request(APIEnvelope<AnimePage>.self, url: url).response.data
+    }
+
+    func browse(filter: BrowseFilter, offset: Int = 0, limit: Int = 40) async throws -> [Anime] {
+        var extra: [String: Any] = [:]
+        if !filter.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            extra["anime_name"] = filter.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if !filter.years.isEmpty { extra["anime_release_years"] = filter.years.sorted() }
+        if !filter.genreIDs.isEmpty { extra["anime_genre_ids"] = filter.genreIDs.sorted() }
+        if !filter.statuses.isEmpty { extra["anime_status"] = filter.statuses.sorted() }
+        if !filter.types.isEmpty { extra["anime_type"] = filter.types.sorted() }
+        if !filter.seasons.isEmpty { extra["anime_season"] = filter.seasons.sorted() }
+        return try await animeList(
+            type: "filter",
+            extra: extra,
+            offset: offset,
+            limit: limit,
+            orderBy: filter.order.rawValue
+        )
+    }
+
+    func details(animeID: String) async throws -> AnimeDetails {
+        guard var components = URLComponents(
+            url: AppConfiguration.animeBaseURL.appendingPathComponent("anime/get-anime-details"),
+            resolvingAgainstBaseURL: false
+        ) else { throw ServiceError.invalidURL }
+        components.queryItems = [URLQueryItem(name: "anime_id", value: animeID)]
+        guard let url = components.url else { throw ServiceError.invalidURL }
+        return try await request(APIEnvelope<AnimeDetails>.self, url: url).response
     }
 
     func episodes(animeID: String) async throws -> [Episode] {
-        let payload: [String: Any] = [
-            "anime_id": animeID,
-            "_offset": 0,
-            "_limit": 500,
-            "_order_by": "latest_first"
-        ]
-        let url = try endpoint("episodes/get-episodes", json: payload)
+        try await details(animeID: animeID).episodes.data
+            .sorted { (Int($0.number) ?? 0) < (Int($1.number) ?? 0) }
+    }
+
+    func filterOptions() async throws -> AnimeFilterOptions {
+        let url = AppConfiguration.animeBaseURL.appendingPathComponent("animes/get-anime-dropdowns")
+        return try await request(APIEnvelope<AnimeFilterOptions>.self, url: url).response
+    }
+
+    private func request<Value: Decodable>(_ type: Value.Type, url: URL) async throws -> Value {
         var request = URLRequest(url: url)
         request.addAnimeClientHeaders()
         let (data, response) = try await session.data(for: request)
         try validate(response, data: data)
-        return try decoder.decode(APIEnvelope<EpisodePage>.self, from: data).response.data
-            .sorted { (Int($0.number) ?? 0) < (Int($1.number) ?? 0) }
+        return try decoder.decode(type, from: data)
     }
 
-    private func endpoint(_ path: String, json: [String: Any]) throws -> URL {
+    private func jsonEndpoint(_ path: String, json: [String: Any]) throws -> URL {
         let jsonData = try JSONSerialization.data(withJSONObject: json)
         guard let jsonText = String(data: jsonData, encoding: .utf8),
-              var components = URLComponents(url: AppConfiguration.animeBaseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false) else {
-            throw ServiceError.invalidURL
-        }
+              var components = URLComponents(
+                url: AppConfiguration.animeBaseURL.appendingPathComponent(path),
+                resolvingAgainstBaseURL: false
+              ) else { throw ServiceError.invalidURL }
         components.queryItems = [URLQueryItem(name: "json", value: jsonText)]
         guard let url = components.url else { throw ServiceError.invalidURL }
         return url

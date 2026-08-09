@@ -1,4 +1,5 @@
 name: AnimeShelf
+developmentLanguage: ar
 options:
   bundleIdPrefix: com.multimedia
   deploymentTarget:
@@ -29,4 +30,16 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
     scheme:
-      testTargets: []
+      testTargets:
+        - AnimeShelfTests
+  AnimeShelfTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: AnimeShelfTests
+    dependencies:
+      - target: AnimeShelf
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.multimedia.AnimeShelfTests
+        GENERATE_INFOPLIST_FILE: YES
