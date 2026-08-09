@@ -20,7 +20,7 @@ final class PlayerViewModel: ObservableObject {
         self.episode = episode
         self.store = store
         do {
-            try configureAudio()
+            configureAudio()
             let url = try await VideoResolver.shared.resolve(episode)
             let item = AVPlayerItem(url: url)
             player.replaceCurrentItem(with: item)
@@ -74,10 +74,14 @@ final class PlayerViewModel: ObservableObject {
         }
     }
 
-    private func configureAudio() throws {
+    private func configureAudio() {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .moviePlayback, options: [.allowAirPlay])
-        try session.setActive(true)
+        do {
+            try session.setCategory(.playback, mode: .moviePlayback, options: [])
+        } catch {
+            try? session.setCategory(.playback)
+        }
+        try? session.setActive(true)
     }
 }
 
