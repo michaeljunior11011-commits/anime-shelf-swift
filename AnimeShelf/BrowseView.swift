@@ -310,7 +310,7 @@ private struct FilterPanel: View {
         if set.contains(value) { set.remove(value) } else { set.insert(value) }
     }
 
-    private func optionGrid<Content: View>(_ values: [FilterOption], @ViewBuilder content: (FilterOption) -> Content) -> some View {
+    private func optionGrid<Content: View>(_ values: [FilterOption], @ViewBuilder content: @escaping (FilterOption) -> Content) -> some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
             ForEach(values) { content($0) }
         }
