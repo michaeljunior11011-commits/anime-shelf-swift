@@ -179,9 +179,23 @@ private struct FeaturedAnimeCard: View {
             } placeholder: {
                 ArtworkPlaceholder()
             }
+            .blur(radius: 18)
+            .scaleEffect(1.12)
+            .opacity(0.48)
+
+            CachedRemoteImage(
+                url: anime.fullCoverURL ?? anime.coverURL ?? anime.bannerURL,
+                targetSize: CGSize(width: 660, height: 920)
+            ) { image in
+                image.resizable().scaledToFit()
+            } placeholder: {
+                ArtworkPlaceholder()
+            }
+            .padding(.horizontal, 22)
+            .padding(.vertical, 8)
 
             LinearGradient(
-                colors: [.clear, .black.opacity(0.18), .black.opacity(0.97)],
+                colors: [.black.opacity(0.04), .clear, .black.opacity(0.28), .black.opacity(0.98)],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -212,7 +226,7 @@ private struct FeaturedAnimeCard: View {
             }
             .padding(18)
         }
-        .frame(height: 455)
+        .frame(height: 480)
         .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 28, style: .continuous)

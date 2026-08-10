@@ -7,6 +7,7 @@ enum AppConfiguration {
     static let clientVersion = "1.7"
     static let videoResolverSecret = "tryud-dy6534-Osah7j2-rukVDdfuZK"
     static let commentsURL = URL(string: "https://animecloudapp.com/aanimeApp65/")!
+    static let commentsCatalogURL = URL(string: "https://khkhkhkh.com/animecp/animeapi65/")!
 }
 
 extension URLRequest {
@@ -25,4 +26,3 @@ extension Dictionary where Key == String, Value == String {
         return components.percentEncodedQuery?.data(using: .utf8)
     }
 }
-

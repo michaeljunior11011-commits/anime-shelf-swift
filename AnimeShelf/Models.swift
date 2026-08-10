@@ -35,6 +35,48 @@ struct Anime: Codable, Identifiable, Hashable, Sendable {
         case latestEpisodeName = "latest_episode_name"
     }
 
+    init(
+        id: String, name: String, type: String?, status: String?, season: String?,
+        releaseYear: String?, rating: String?, genres: String?, coverURL: URL?,
+        fullCoverURL: URL?, bannerURL: URL?, synopsis: String?, englishTitle: String?,
+        latestEpisodeID: String?, latestEpisodeName: String?
+    ) {
+        self.id = id
+        self.name = name
+        self.type = type
+        self.status = status
+        self.season = season
+        self.releaseYear = releaseYear
+        self.rating = rating
+        self.genres = genres
+        self.coverURL = coverURL
+        self.fullCoverURL = fullCoverURL
+        self.bannerURL = bannerURL
+        self.synopsis = synopsis
+        self.englishTitle = englishTitle
+        self.latestEpisodeID = latestEpisodeID
+        self.latestEpisodeName = latestEpisodeName
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = values.flexibleStringIfPresent(forKey: .id) ?? UUID().uuidString
+        name = values.flexibleStringIfPresent(forKey: .name) ?? "Anime"
+        type = values.flexibleStringIfPresent(forKey: .type)
+        status = values.flexibleStringIfPresent(forKey: .status)
+        season = values.flexibleStringIfPresent(forKey: .season)
+        releaseYear = values.flexibleStringIfPresent(forKey: .releaseYear)
+        rating = values.flexibleStringIfPresent(forKey: .rating)
+        genres = values.flexibleStringIfPresent(forKey: .genres)
+        coverURL = values.flexibleURLIfPresent(forKey: .coverURL)
+        fullCoverURL = values.flexibleURLIfPresent(forKey: .fullCoverURL)
+        bannerURL = values.flexibleURLIfPresent(forKey: .bannerURL)
+        synopsis = values.flexibleStringIfPresent(forKey: .synopsis)
+        englishTitle = values.flexibleStringIfPresent(forKey: .englishTitle)
+        latestEpisodeID = values.flexibleStringIfPresent(forKey: .latestEpisodeID)
+        latestEpisodeName = values.flexibleStringIfPresent(forKey: .latestEpisodeName)
+    }
+
     func metadataLine(language: AppLanguage) -> String {
         [releaseYear, localizedType(language), localizedStatus(language)].compactMap { value in
             guard let value, !value.isEmpty else { return nil }
@@ -65,6 +107,13 @@ struct Anime: Codable, Identifiable, Hashable, Sendable {
 
 struct AnimePage: Decodable, Sendable {
     let data: [Anime]
+
+    enum CodingKeys: String, CodingKey { case data }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        data = values.lossyArray(Anime.self, forKey: .data)
+    }
 }
 
 struct APIEnvelope<Value: Decodable>: Decodable {
@@ -104,6 +153,25 @@ struct AnimeDetails: Decodable, Sendable {
         case fullCoverURL = "anime_cover_image_full_url"
         case bannerURL = "anime_banner_image_url"
         case episodes
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = values.flexibleStringIfPresent(forKey: .id) ?? ""
+        name = values.flexibleStringIfPresent(forKey: .name) ?? "Anime"
+        type = values.flexibleStringIfPresent(forKey: .type)
+        status = values.flexibleStringIfPresent(forKey: .status)
+        season = values.flexibleStringIfPresent(forKey: .season)
+        releaseYear = values.flexibleStringIfPresent(forKey: .releaseYear)
+        ageRating = values.flexibleStringIfPresent(forKey: .ageRating)
+        rating = values.flexibleStringIfPresent(forKey: .rating)
+        synopsis = values.flexibleStringIfPresent(forKey: .synopsis)
+        englishTitle = values.flexibleStringIfPresent(forKey: .englishTitle)
+        genres = values.flexibleStringIfPresent(forKey: .genres)
+        coverURL = values.flexibleURLIfPresent(forKey: .coverURL)
+        fullCoverURL = values.flexibleURLIfPresent(forKey: .fullCoverURL)
+        bannerURL = values.flexibleURLIfPresent(forKey: .bannerURL)
+        episodes = (try? values.decode(EpisodePage.self, forKey: .episodes)) ?? EpisodePage(data: [], count: 0)
     }
 
     var anime: Anime {
@@ -146,6 +214,30 @@ struct Episode: Codable, Identifiable, Hashable, Sendable {
         case sources = "episode_urls"
     }
 
+    init(
+        id: String, name: String, number: String, skipFrom: String?, skipTo: String?,
+        rating: String?, sources: [EpisodeSource]
+    ) {
+        self.id = id
+        self.name = name
+        self.number = number
+        self.skipFrom = skipFrom
+        self.skipTo = skipTo
+        self.rating = rating
+        self.sources = sources
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = values.flexibleStringIfPresent(forKey: .id) ?? UUID().uuidString
+        name = values.flexibleStringIfPresent(forKey: .name) ?? "Episode"
+        number = values.flexibleStringIfPresent(forKey: .number) ?? "0"
+        skipFrom = values.flexibleStringIfPresent(forKey: .skipFrom)
+        skipTo = values.flexibleStringIfPresent(forKey: .skipTo)
+        rating = values.flexibleStringIfPresent(forKey: .rating)
+        sources = values.lossyArray(EpisodeSource.self, forKey: .sources)
+    }
+
     var serverIntroTiming: IntroTiming? {
         guard let start = Double(skipFrom ?? ""),
               let end = Double(skipTo ?? ""),
@@ -157,6 +249,19 @@ struct Episode: Codable, Identifiable, Hashable, Sendable {
 struct EpisodePage: Decodable, Sendable {
     let data: [Episode]
     let count: Int?
+
+    enum CodingKeys: String, CodingKey { case data, count, total }
+
+    init(data: [Episode], count: Int?) {
+        self.data = data
+        self.count = count
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        data = values.lossyArray(Episode.self, forKey: .data)
+        count = values.flexibleIntIfPresent(forKey: .count) ?? values.flexibleIntIfPresent(forKey: .total)
+    }
 }
 
 struct EpisodeSource: Codable, Hashable, Sendable {
@@ -170,6 +275,24 @@ struct EpisodeSource: Codable, Hashable, Sendable {
         case serverID = "episode_server_id"
         case serverName = "episode_server_name"
         case url = "episode_url"
+    }
+
+    init(id: String, serverID: String, serverName: String, url: URL) {
+        self.id = id
+        self.serverID = serverID
+        self.serverName = serverName
+        self.url = url
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = values.flexibleStringIfPresent(forKey: .id) ?? UUID().uuidString
+        serverID = values.flexibleStringIfPresent(forKey: .serverID) ?? ""
+        serverName = values.flexibleStringIfPresent(forKey: .serverName) ?? "Server"
+        guard let decodedURL = values.flexibleURLIfPresent(forKey: .url) else {
+            throw DecodingError.dataCorruptedError(forKey: .url, in: values, debugDescription: "Invalid video source URL")
+        }
+        url = decodedURL
     }
 }
 
@@ -198,6 +321,19 @@ struct RemoteComment: Identifiable, Hashable, Sendable {
 struct ResolvedVideo: Decodable, Sendable {
     let file: URL
     let label: String
+
+    enum CodingKeys: String, CodingKey { case file, url, label, quality }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        guard let value = values.flexibleURLIfPresent(forKey: .file) ?? values.flexibleURLIfPresent(forKey: .url) else {
+            throw DecodingError.dataCorruptedError(forKey: .file, in: values, debugDescription: "Invalid media URL")
+        }
+        file = value
+        label = values.flexibleStringIfPresent(forKey: .label)
+            ?? values.flexibleStringIfPresent(forKey: .quality)
+            ?? "mp4"
+    }
 }
 
 struct ResolvedMedia: Hashable, Sendable {
@@ -212,7 +348,8 @@ struct ResolvedMedia: Hashable, Sendable {
         let bitrate = estimatedBitrate > 0
             ? String(format: "%.2f Mbps", estimatedBitrate / 1_000_000)
             : nil
-        return ["\(width)×\(height)", bitrate].compactMap { $0 }.joined(separator: " • ")
+        let dimensions = width > 0 ? "\(width)×\(height)" : "\(height)p"
+        return [dimensions, bitrate].compactMap { $0 }.joined(separator: " • ")
     }
 }
 
@@ -255,10 +392,43 @@ struct FilterOption: Codable, Identifiable, Hashable, Sendable {
     let option: String
     let value: String
     var id: String { value }
+
+    enum CodingKeys: String, CodingKey { case option, value, name, id }
+
+    init(option: String, value: String) {
+        self.option = option
+        self.value = value
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        option = values.flexibleStringIfPresent(forKey: .option)
+            ?? values.flexibleStringIfPresent(forKey: .name)
+            ?? ""
+        value = values.flexibleStringIfPresent(forKey: .value)
+            ?? values.flexibleStringIfPresent(forKey: .id)
+            ?? option
+    }
 }
 
 struct FilterOptionGroup: Decodable, Sendable {
     let data: [FilterOption]
+
+    enum CodingKeys: String, CodingKey { case data, options }
+
+    init(data: [FilterOption]) { self.data = data }
+
+    init(from decoder: Decoder) throws {
+        if let single = try? decoder.singleValueContainer(),
+           let items = try? single.decode([FilterOption].self) {
+            data = items
+            return
+        }
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        data = (try? values.decodeIfPresent([FilterOption].self, forKey: .data))
+            ?? (try? values.decodeIfPresent([FilterOption].self, forKey: .options))
+            ?? []
+    }
 }
 
 struct AnimeFilterOptions: Decodable, Sendable {
@@ -270,6 +440,42 @@ struct AnimeFilterOptions: Decodable, Sendable {
         case genres = "anime_genres"
         case years = "anime_release_years"
         case seasons
+    }
+
+    init(genres: FilterOptionGroup, years: FilterOptionGroup, seasons: FilterOptionGroup) {
+        self.genres = genres
+        self.years = years
+        self.seasons = seasons
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        genres = (try? values.decodeIfPresent(FilterOptionGroup.self, forKey: .genres)) ?? FilterOptionGroup(data: [])
+        years = (try? values.decodeIfPresent(FilterOptionGroup.self, forKey: .years)) ?? FilterOptionGroup(data: [])
+        seasons = (try? values.decodeIfPresent(FilterOptionGroup.self, forKey: .seasons)) ?? FilterOptionGroup(data: [])
+    }
+}
+
+extension AnimeFilterOptions {
+    static var fallback: AnimeFilterOptions {
+        let genres = [
+            ("أكشن", "1"), ("مغامرات", "2"), ("كوميديا", "4"), ("غموض", "7"),
+            ("دراما", "8"), ("خيال", "10"), ("رعب", "13"), ("سحر", "15"),
+            ("رومانسي", "21"), ("مدرسي", "22"), ("خيال علمي", "23"),
+            ("شونين", "25"), ("رياضي", "27"), ("قوى خارقة", "28"),
+            ("شريحة من الحياة", "31"), ("خارق للطبيعة", "32"), ("نفسي", "35"),
+            ("إثارة", "36"), ("سينين", "37"), ("إيسيكاي", "39")
+        ].map { FilterOption(option: $0.0, value: $0.1) }
+        let current = Calendar.current.component(.year, from: Date())
+        let years = stride(from: current, through: 1950, by: -1)
+            .map { FilterOption(option: String($0), value: String($0)) }
+        let seasons = ["Winter", "Spring", "Summer", "Fall"]
+            .map { FilterOption(option: $0, value: $0) }
+        return AnimeFilterOptions(
+            genres: FilterOptionGroup(data: genres),
+            years: FilterOptionGroup(data: years),
+            seasons: FilterOptionGroup(data: seasons)
+        )
     }
 }
 

@@ -7,6 +7,7 @@ final class BrowseViewModel: ObservableObject {
     @Published var filter: BrowseFilter
     @Published var isLoading = false
     @Published var isLoadingMore = false
+    @Published var isLoadingOptions = false
     @Published var errorMessage: String?
 
     private let key = "anime-shelf.browse-filter.v1"
@@ -23,9 +24,15 @@ final class BrowseViewModel: ObservableObject {
     }
 
     func loadInitial() async {
-        async let optionRequest = try? AnimeSlayerService.shared.filterOptions()
-        await reload()
-        options = await optionRequest
+        isLoadingOptions = true
+        async let listRequest: Void = reload()
+        do {
+            options = try await AnimeSlayerService.shared.filterOptions()
+        } catch {
+            options = .fallback
+        }
+        isLoadingOptions = false
+        await listRequest
     }
 
     func apply(_ newFilter: BrowseFilter) async {
@@ -208,7 +215,8 @@ private struct FilterPanel: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var settings: AppSettingsStore
     @State private var draft: BrowseFilter
-    @State private var expanded: Set<String> = ["Year"]
+    @State private var expanded: Set<String> = ["Year", "Genre", "Status", "Type", "Season", "Sort"]
+    @State private var optionSearch = ""
     let options: AnimeFilterOptions?
     let apply: (BrowseFilter) -> Void
 
@@ -224,38 +232,53 @@ private struct FilterPanel: View {
                 AppBackdrop()
                 ScrollView {
                     VStack(spacing: 11) {
+                        HStack(spacing: 9) {
+                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                            TextField("Search filters", text: $optionSearch)
+                                .textInputAutocapitalization(.never)
+                            if !optionSearch.isEmpty {
+                                Button { optionSearch = "" } label: {
+                                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 13)
+                        .frame(height: 46)
+                        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
                         FilterSection(title: "Year", expanded: binding("Year")) {
-                            optionGrid(yearOptions) { option in
+                            optionGrid(filtered(yearOptions)) { option in
                                 filterCheck(option.option, selected: draft.years.contains(option.value)) {
                                     toggle(option.value, in: &draft.years)
                                 }
                             }
                         }
                         FilterSection(title: "Genre", expanded: binding("Genre")) {
-                            optionGrid(options?.genres.data ?? []) { option in
+                            optionGrid(filtered(genreOptions)) { option in
                                 filterCheck(option.option, selected: draft.genreIDs.contains(option.value)) {
                                     toggle(option.value, in: &draft.genreIDs)
                                 }
                             }
                         }
                         FilterSection(title: "Status", expanded: binding("Status")) {
-                            optionGrid(statusOptions) { option in
+                            optionGrid(filtered(statusOptions)) { option in
                                 filterCheck(LocalizedStringKey(option.option), selected: draft.statuses.contains(option.value)) {
-                                    toggle(option.value, in: &draft.statuses)
+                                    toggleExclusive(option.value, in: &draft.statuses)
                                 }
                             }
                         }
                         FilterSection(title: "Type", expanded: binding("Type")) {
-                            optionGrid(typeOptions) { option in
+                            optionGrid(filtered(typeOptions)) { option in
                                 filterCheck(LocalizedStringKey(option.option), selected: draft.types.contains(option.value)) {
-                                    toggle(option.value, in: &draft.types)
+                                    toggleExclusive(option.value, in: &draft.types)
                                 }
                             }
                         }
                         FilterSection(title: "Season", expanded: binding("Season")) {
-                            optionGrid(options?.seasons.data ?? []) { option in
+                            optionGrid(filtered(seasonOptions)) { option in
                                 filterCheck(option.option, selected: draft.seasons.contains(option.value)) {
-                                    toggle(option.value, in: &draft.seasons)
+                                    toggleExclusive(option.value, in: &draft.seasons)
                                 }
                             }
                         }
@@ -291,7 +314,19 @@ private struct FilterPanel: View {
 
     private var yearOptions: [FilterOption] {
         let current = Calendar.current.component(.year, from: Date())
-        return (options?.years.data ?? []).filter { (Int($0.value) ?? current) <= current }
+        let remote = options?.years.data ?? []
+        let values = remote.isEmpty
+            ? stride(from: current, through: 1950, by: -1).map { FilterOption(option: String($0), value: String($0)) }
+            : remote
+        return values.filter { (Int($0.value) ?? current) <= current }
+    }
+    private var genreOptions: [FilterOption] {
+        let remote = options?.genres.data ?? []
+        return remote.isEmpty ? AnimeFilterOptions.fallback.genres.data : remote
+    }
+    private var seasonOptions: [FilterOption] {
+        let remote = options?.seasons.data ?? []
+        return remote.isEmpty ? AnimeFilterOptions.fallback.seasons.data : remote
     }
     private var statusOptions: [FilterOption] { [
         FilterOption(option: "Currently Airing", value: "Currently Airing"),
@@ -299,6 +334,14 @@ private struct FilterPanel: View {
         FilterOption(option: "Not yet aired", value: "Not yet aired")
     ] }
     private var typeOptions: [FilterOption] { ["TV", "Movie", "OVA", "ONA", "Special"].map { FilterOption(option: $0, value: $0) } }
+
+    private func filtered(_ values: [FilterOption]) -> [FilterOption] {
+        let query = optionSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return values }
+        return values.filter {
+            $0.option.localizedCaseInsensitiveContains(query) || $0.value.localizedCaseInsensitiveContains(query)
+        }
+    }
 
     private func binding(_ key: String) -> Binding<Bool> {
         Binding(get: { expanded.contains(key) }, set: { value in
@@ -308,6 +351,14 @@ private struct FilterPanel: View {
 
     private func toggle(_ value: String, in set: inout Set<String>) {
         if set.contains(value) { set.remove(value) } else { set.insert(value) }
+    }
+
+    private func toggleExclusive(_ value: String, in set: inout Set<String>) {
+        if set.contains(value) {
+            set.removeAll()
+        } else {
+            set = [value]
+        }
     }
 
     private func optionGrid<Content: View>(_ values: [FilterOption], @ViewBuilder content: @escaping (FilterOption) -> Content) -> some View {

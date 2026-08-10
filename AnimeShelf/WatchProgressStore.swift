@@ -25,9 +25,8 @@ final class WatchProgressStore: ObservableObject {
     var continueWatching: [AnimeProgressSummary] {
         let grouped = Dictionary(grouping: records, by: \.animeID)
         return grouped.compactMap { animeID, animeRecords in
-            guard let latestIncomplete = animeRecords
-                .filter({ !$0.completed })
-                .max(by: { $0.updatedAt < $1.updatedAt }) else { return nil }
+            guard let latestIncomplete = animeRecords.max(by: { $0.updatedAt < $1.updatedAt }),
+                  !latestIncomplete.completed else { return nil }
             let total = max(max(animeRecords.map(\.episodeCount).max() ?? 0, animeRecords.count), 1)
             let completed = animeRecords.filter(\.completed).count
             let watched = animeRecords.reduce(0.0) { $0 + $1.fraction }
@@ -121,6 +120,30 @@ final class WatchProgressStore: ObservableObject {
             episodeCount: episodeCount,
             completed: true
         )
+    }
+
+    func prepareNext(anime: Anime, episode: Episode, episodeCount: Int) {
+        if let index = records.firstIndex(where: { $0.episodeID == episode.id }) {
+            guard !records[index].completed else { return }
+            records[index].episodeCount = max(records[index].episodeCount, episodeCount)
+            records[index].updatedAt = Date()
+        } else {
+            records.append(WatchRecord(
+                episodeID: episode.id,
+                animeID: anime.id,
+                animeName: anime.name,
+                coverURL: anime.fullCoverURL ?? anime.coverURL,
+                bannerURL: anime.bannerURL,
+                episodeNumber: episode.number,
+                seconds: 0,
+                duration: 0,
+                completed: false,
+                episodeCount: episodeCount,
+                updatedAt: Date()
+            ))
+        }
+        records.sort { $0.updatedAt > $1.updatedAt }
+        persist()
     }
 
     func remove(episodeID: String) {

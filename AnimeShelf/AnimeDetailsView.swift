@@ -40,7 +40,9 @@ struct AnimeDetailsView: View {
         .toolbarBackground(.hidden, for: .navigationBar)
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadDetails() }
-        .sheet(item: $commentsEpisode) { CommentsView(episodeID: $0.id) }
+        .sheet(item: $commentsEpisode) {
+            CommentsView(animeName: displayAnime.name, episodeNumber: $0.number, episodeID: $0.id)
+        }
         .navigationDestination(item: $playbackContext) { PlayerView(context: $0) }
     }
 

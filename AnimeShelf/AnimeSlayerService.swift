@@ -11,8 +11,8 @@ actor AnimeSlayerService {
         } else {
             let configuration = URLSessionConfiguration.default
             configuration.waitsForConnectivity = true
-            configuration.timeoutIntervalForRequest = 20
-            configuration.timeoutIntervalForResource = 60
+            configuration.timeoutIntervalForRequest = 25
+            configuration.timeoutIntervalForResource = 90
             configuration.urlCache = URLCache(
                 memoryCapacity: 16 * 1_024 * 1_024,
                 diskCapacity: 80 * 1_024 * 1_024
@@ -44,11 +44,11 @@ actor AnimeSlayerService {
         if !filter.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             extra["anime_name"] = filter.query.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        if !filter.years.isEmpty { extra["anime_release_years"] = filter.years.sorted() }
-        if !filter.genreIDs.isEmpty { extra["anime_genre_ids"] = filter.genreIDs.sorted() }
-        if !filter.statuses.isEmpty { extra["anime_status"] = filter.statuses.sorted() }
-        if !filter.types.isEmpty { extra["anime_type"] = filter.types.sorted() }
-        if !filter.seasons.isEmpty { extra["anime_season"] = filter.seasons.sorted() }
+        if !filter.years.isEmpty { extra["anime_release_years"] = filter.years.sorted().joined(separator: ",") }
+        if !filter.genreIDs.isEmpty { extra["anime_genre_ids"] = filter.genreIDs.sorted().joined(separator: ",") }
+        if let value = filter.statuses.sorted().first { extra["anime_status"] = value }
+        if let value = filter.types.sorted().first { extra["anime_type"] = value }
+        if let value = filter.seasons.sorted().first { extra["anime_season"] = value }
         return try await animeList(
             type: "filter",
             extra: extra,
@@ -83,7 +83,11 @@ actor AnimeSlayerService {
         request.addAnimeClientHeaders()
         let (data, response) = try await session.data(for: request)
         try validate(response, data: data)
-        return try decoder.decode(type, from: data)
+        do {
+            return try decoder.decode(type, from: FlexibleJSON.decodedData(from: data))
+        } catch {
+            throw ServiceError.invalidResponse
+        }
     }
 
     private func jsonEndpoint(_ path: String, json: [String: Any]) throws -> URL {
@@ -109,12 +113,14 @@ actor AnimeSlayerService {
 enum ServiceError: LocalizedError {
     case invalidURL
     case noVideo
+    case invalidResponse
     case server(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidURL: return "تعذر إنشاء رابط صالح."
         case .noVideo: return "لا يوجد مصدر فيديو صالح لهذه الحلقة."
+        case .invalidResponse: return "أرسل الخادم بيانات غير مكتملة. حاول مرة أخرى أو اختر مصدرًا آخر."
         case .server(let message): return message
         }
     }

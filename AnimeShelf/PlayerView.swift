@@ -20,6 +20,7 @@ final class PlayerViewModel: ObservableObject {
     private weak var settingsStore: AppSettingsStore?
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
+    private var lifecycleObservers: [NSObjectProtocol] = []
     private var permitsProgressWrites = false
     private var lastSavedTime = -1.0
     private var loadGeneration = 0
@@ -53,6 +54,7 @@ final class PlayerViewModel: ObservableObject {
         configureAudio()
         player.automaticallyWaitsToMinimizeStalling = true
         observeTime()
+        observeLifecycle()
 
         let initial = context.episodes.firstIndex { $0.id == context.initialEpisodeID } ?? 0
         await playEpisode(at: initial, saveCurrent: false)
@@ -129,49 +131,29 @@ final class PlayerViewModel: ObservableObject {
 
         do {
             let episode = context.episodes[index]
-            let resolved = try await VideoResolver.shared.resolve(
+            let candidates = try await VideoResolver.shared.resolveCandidates(
                 episode,
                 preference: settingsStore.value.videoQuality
             )
             guard generation == loadGeneration else { return }
-            media = resolved
-
-            let asset = AVURLAsset(
-                url: resolved.url,
-                options: [
-                    AVURLAssetAllowsCellularAccessKey: true,
-                    AVURLAssetAllowsExpensiveNetworkAccessKey: true,
-                    AVURLAssetAllowsConstrainedNetworkAccessKey: true
-                ]
-            )
-            let item = AVPlayerItem(asset: asset)
-            item.preferredForwardBufferDuration = settingsStore.value.buffer.forwardSeconds
-            item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-            player.replaceCurrentItem(with: item)
-            player.isMuted = isMuted
-            if !isMuted { player.volume = 1 }
-            observeEnd(of: item)
-
-            try await waitUntilReady(item, generation: generation)
-            guard generation == loadGeneration else { return }
-
-            let loadedDuration = try? await asset.load(.duration)
-            let durationValue = loadedDuration?.seconds ?? item.duration.seconds
-            duration = durationValue.isFinite ? durationValue : 0
-
-            if let saved = progressStore?.progress(for: episode.id),
-               !saved.completed,
-               saved.seconds > 0.5,
-               (duration == 0 || saved.seconds < duration - 2) {
-                let target = CMTime(seconds: saved.seconds, preferredTimescale: 1_000)
-                _ = await item.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
-                currentTime = saved.seconds
+            var lastError: Error?
+            for candidate in candidates {
+                guard generation == loadGeneration else { return }
+                do {
+                    try await prepareAndPlay(
+                        candidate,
+                        episode: episode,
+                        generation: generation,
+                        bufferSeconds: settingsStore.value.buffer.forwardSeconds
+                    )
+                    return
+                } catch {
+                    lastError = error
+                    removeEndObserver()
+                    player.replaceCurrentItem(with: nil)
+                }
             }
-
-            guard generation == loadGeneration else { return }
-            permitsProgressWrites = true
-            isLoading = false
-            player.play()
+            throw lastError ?? ServiceError.noVideo
         } catch {
             guard generation == loadGeneration else { return }
             errorMessage = error.localizedDescription
@@ -179,8 +161,66 @@ final class PlayerViewModel: ObservableObject {
         }
     }
 
+    private func prepareAndPlay(
+        _ resolved: ResolvedMedia,
+        episode: Episode,
+        generation: Int,
+        bufferSeconds: TimeInterval
+    ) async throws {
+        media = resolved
+        let asset = AVURLAsset(
+            url: resolved.url,
+            options: [
+                AVURLAssetAllowsCellularAccessKey: true,
+                AVURLAssetAllowsExpensiveNetworkAccessKey: true,
+                AVURLAssetAllowsConstrainedNetworkAccessKey: true,
+                AVURLAssetPreferPreciseDurationAndTimingKey: false
+            ]
+        )
+        let item = AVPlayerItem(asset: asset)
+        item.preferredForwardBufferDuration = bufferSeconds
+        item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        removeEndObserver()
+        player.replaceCurrentItem(with: item)
+        player.isMuted = isMuted
+        player.volume = isMuted ? 0 : 1
+        observeEnd(of: item)
+
+        try await waitUntilReady(item, generation: generation)
+        guard generation == loadGeneration else { throw CancellationError() }
+
+        let loadedDuration = try? await asset.load(.duration)
+        let durationValue = loadedDuration?.seconds ?? item.duration.seconds
+        duration = durationValue.isFinite && durationValue > 0 ? durationValue : 0
+
+        if let saved = progressStore?.progress(for: episode.id),
+           !saved.completed,
+           saved.seconds > 0.25,
+           (duration == 0 || saved.seconds < duration - 1) {
+            let restored = min(saved.seconds, max(duration - 1, saved.seconds))
+            let target = CMTime(seconds: restored, preferredTimescale: 1_000)
+            let seeked = await item.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+            guard seeked, generation == loadGeneration else { throw CancellationError() }
+            currentTime = restored
+        }
+
+        guard generation == loadGeneration else { throw CancellationError() }
+        permitsProgressWrites = true
+        isLoading = false
+        errorMessage = nil
+        player.playImmediately(atRate: 1)
+        Task { [weak self] in
+            guard let actual = await VideoResolver.inspectURL(resolved.url, sourceName: resolved.sourceName) else { return }
+            await MainActor.run {
+                guard let self, generation == self.loadGeneration,
+                      self.media?.url == resolved.url else { return }
+                self.media = actual
+            }
+        }
+    }
+
     private func waitUntilReady(_ item: AVPlayerItem, generation: Int) async throws {
-        for _ in 0..<180 {
+        for _ in 0..<100 {
             guard generation == loadGeneration else { throw CancellationError() }
             switch item.status {
             case .readyToPlay: return
@@ -205,7 +245,7 @@ final class PlayerViewModel: ObservableObject {
                 if itemDuration.isFinite, itemDuration > 0 { self.duration = itemDuration }
                 if self.permitsProgressWrites,
                    self.currentTime > 0,
-                   abs(self.currentTime - self.lastSavedTime) >= 2 {
+                   abs(self.currentTime - self.lastSavedTime) >= 1 {
                     self.saveNow()
                 }
                 self.objectWillChange.send()
@@ -231,6 +271,14 @@ final class PlayerViewModel: ObservableObject {
                     duration: self.duration,
                     episodeCount: context.episodes.count
                 )
+                if self.hasNextEpisode,
+                   let next = context.episodes[safe: self.currentIndex + 1] {
+                    self.progressStore?.prepareNext(
+                        anime: context.anime,
+                        episode: next,
+                        episodeCount: context.episodes.count
+                    )
+                }
                 self.progressStore?.flush()
                 if self.settingsStore?.value.autoPlayNext == true, self.hasNextEpisode {
                     self.playNext()
@@ -248,6 +296,28 @@ final class PlayerViewModel: ObservableObject {
         removeEndObserver()
         if let timeObserver { player.removeTimeObserver(timeObserver) }
         timeObserver = nil
+        lifecycleObservers.forEach(NotificationCenter.default.removeObserver)
+        lifecycleObservers = []
+    }
+
+    private func observeLifecycle() {
+        guard lifecycleObservers.isEmpty else { return }
+        for name in [UIApplication.didEnterBackgroundNotification, UIApplication.willTerminateNotification] {
+            lifecycleObservers.append(NotificationCenter.default.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.saveNow() }
+            })
+        }
+        lifecycleObservers.append(NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemPlaybackStalled,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.saveNow() }
+        })
     }
 
     private func configureAudio() {
@@ -260,6 +330,10 @@ final class PlayerViewModel: ObservableObject {
             try? session.setActive(true)
         }
     }
+}
+
+private extension Collection {
+    subscript(safe index: Index) -> Element? { indices.contains(index) ? self[index] : nil }
 }
 
 struct PlayerView: View {
@@ -329,7 +403,9 @@ struct PlayerView: View {
             if newPhase != .active { model.saveNow(); progressStore.flush() }
         }
         .sheet(isPresented: $showComments) {
-            if let episode = model.currentEpisode { CommentsView(episodeID: episode.id) }
+            if let episode = model.currentEpisode {
+                CommentsView(animeName: context.anime.name, episodeNumber: episode.number, episodeID: episode.id)
+            }
         }
         .fullScreenCover(isPresented: $showFullScreen) {
             FullScreenPlayer(model: model, isPresented: $showFullScreen)
@@ -340,66 +416,84 @@ struct PlayerView: View {
 private struct VideoStage: View {
     @ObservedObject var model: PlayerViewModel
     let showFullScreen: (() -> Void)?
-    @EnvironmentObject private var settings: AppSettingsStore
 
     var body: some View {
-        ZStack {
-            SystemVideoPlayer(player: model.player)
-            VStack {
-                HStack {
-                    Spacer()
-                    Button { model.toggleMute() } label: {
-                        Image(systemName: model.isMuted ? "speaker.slash.fill" : "speaker.wave.3.fill")
-                            .frame(width: 42, height: 42)
-                    }
-                    .buttonStyle(.glass)
-                    if let showFullScreen {
-                        Button(action: showFullScreen) {
-                            Image(systemName: "arrow.up.left.and.arrow.down.right")
-                                .frame(width: 42, height: 42)
-                        }
-                        .buttonStyle(.glassProminent)
-                    }
-                }
-                .padding(10)
-                Spacer()
-                HStack {
-                    if model.shouldShowSkipIntro {
-                        Button("Skip Intro", systemImage: "forward.end.fill") { model.skipIntro() }
-                            .buttonStyle(.glassProminent)
-                            .transition(.move(edge: .leading).combined(with: .opacity))
-                    }
-                    Spacer()
-                    if model.shouldShowNextEpisode {
-                        Button("Next Episode", systemImage: "forward.end.fill") { model.playNext() }
-                            .buttonStyle(.glassProminent)
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
-                    }
-                }
-                .padding(14)
-                .animation(.smooth(duration: 0.25), value: model.shouldShowSkipIntro)
-                .animation(.smooth(duration: 0.25), value: model.shouldShowNextEpisode)
-            }
-        }
+        SystemVideoPlayer(model: model, showFullScreen: showFullScreen)
         .background(.black)
     }
 }
 
 private struct SystemVideoPlayer: UIViewControllerRepresentable {
-    let player: AVPlayer
+    @ObservedObject var model: PlayerViewModel
+    let showFullScreen: (() -> Void)?
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
-        controller.player = player
+        controller.player = model.player
         controller.showsPlaybackControls = true
         controller.allowsPictureInPicturePlayback = true
         controller.canStartPictureInPictureAutomaticallyFromInline = true
         controller.updatesNowPlayingInfoCenter = true
+        let hosting = UIHostingController(rootView: NativePlayerOverlay(model: model, showFullScreen: showFullScreen))
+        hosting.view.backgroundColor = .clear
+        controller.customOverlayViewController = hosting
+        context.coordinator.hosting = hosting
         return controller
     }
 
     func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
-        controller.player = player
+        controller.player = model.player
+        context.coordinator.hosting?.rootView = NativePlayerOverlay(model: model, showFullScreen: showFullScreen)
+    }
+
+    final class Coordinator {
+        var hosting: UIHostingController<NativePlayerOverlay>?
+    }
+}
+
+private struct NativePlayerOverlay: View {
+    @ObservedObject var model: PlayerViewModel
+    let showFullScreen: (() -> Void)?
+
+    var body: some View {
+        VStack {
+            HStack(spacing: 10) {
+                Spacer()
+                Button { model.toggleMute() } label: {
+                    Image(systemName: model.isMuted ? "speaker.slash.fill" : "speaker.wave.3.fill")
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.circle)
+                if let showFullScreen {
+                    Button(action: showFullScreen) {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.circle)
+                }
+            }
+            .padding(12)
+            Spacer()
+            HStack {
+                if model.shouldShowSkipIntro {
+                    Button("Skip Intro", systemImage: "forward.end.fill") { model.skipIntro() }
+                        .buttonStyle(.borderedProminent)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                }
+                Spacer()
+                if model.shouldShowNextEpisode {
+                    Button("Next Episode", systemImage: "forward.end.fill") { model.playNext() }
+                        .buttonStyle(.borderedProminent)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+            .padding(14)
+        }
+        .tint(.cyan)
+        .animation(.smooth(duration: 0.25), value: model.shouldShowSkipIntro)
+        .animation(.smooth(duration: 0.25), value: model.shouldShowNextEpisode)
     }
 }
 

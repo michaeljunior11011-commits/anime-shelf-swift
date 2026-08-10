@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct CommentsView: View {
+    let animeName: String
+    let episodeNumber: String
     let episodeID: String
     @Environment(\.dismiss) private var dismiss
     @State private var comments: [RemoteComment] = []
@@ -52,7 +54,11 @@ struct CommentsView: View {
 
     private func load() async {
         do {
-            comments = try await AnimeCloudCommentsService.shared.comments(episodeID: episodeID)
+            comments = try await AnimeCloudCommentsService.shared.comments(
+                animeName: animeName,
+                episodeNumber: episodeNumber,
+                fallbackEpisodeID: episodeID
+            )
         } catch {
             errorMessage = error.localizedDescription
         }
