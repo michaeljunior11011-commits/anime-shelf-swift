@@ -3,11 +3,12 @@ import Foundation
 extension KeyedDecodingContainer {
     func flexibleStringIfPresent(forKey key: Key) -> String? {
         if let value = try? decodeIfPresent(String.self, forKey: key) { return value }
-        if let value = try? decodeIfPresent(Int.self, forKey: key) { return value.map(String.init) }
+        if let value = try? decodeIfPresent(Int.self, forKey: key) { return String(value) }
         if let value = try? decodeIfPresent(Double.self, forKey: key) {
-            return value.map { $0.rounded() == $0 ? String(Int($0)) : String($0) }
+            if value.rounded() == value { return String(Int(value)) }
+            return String(value)
         }
-        if let value = try? decodeIfPresent(Bool.self, forKey: key) { return value.map(String.init) }
+        if let value = try? decodeIfPresent(Bool.self, forKey: key) { return String(value) }
         return nil
     }
 
