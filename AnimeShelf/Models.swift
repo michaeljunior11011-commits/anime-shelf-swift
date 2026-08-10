@@ -110,6 +110,8 @@ struct AnimePage: Decodable, Sendable {
 
     enum CodingKeys: String, CodingKey { case data }
 
+    init(data: [Anime]) { self.data = data }
+
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         data = values.lossyArray(Anime.self, forKey: .data)
@@ -118,6 +120,27 @@ struct AnimePage: Decodable, Sendable {
 
 struct APIEnvelope<Value: Decodable>: Decodable {
     let response: Value
+
+    enum CodingKeys: String, CodingKey { case response }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        if let decoded = try? values.decode(Value.self, forKey: .response) {
+            response = decoded
+            return
+        }
+        if let empty = try? values.nestedUnkeyedContainer(forKey: .response),
+           empty.isAtEnd,
+           let page = AnimePage(data: []) as? Value {
+            response = page
+            return
+        }
+        throw DecodingError.dataCorruptedError(
+            forKey: .response,
+            in: values,
+            debugDescription: "Unsupported response payload"
+        )
+    }
 }
 
 struct AnimeDetails: Decodable, Sendable {

@@ -39,7 +39,7 @@ final class PlayerViewModel: ObservableObject {
     var shouldShowSkipIntro: Bool {
         guard let context, let episode = currentEpisode, let settingsStore,
               let timing = settingsStore.introTiming(animeID: context.anime.id, episode: episode) else { return false }
-        return currentTime >= timing.start && currentTime < timing.end
+        return currentTime >= max(timing.start - 10, 0) && currentTime < timing.end
     }
 
     func load(
@@ -368,7 +368,7 @@ struct PlayerView: View {
 
                 if let media = model.media {
                     HStack(spacing: 8) {
-                        Label(media.qualityLabel, systemImage: "4k.tv")
+                        Label(media.qualityLabel, systemImage: "tv")
                         Text("•")
                         Text(media.sourceName)
                     }
@@ -380,13 +380,10 @@ struct PlayerView: View {
                     .font(.system(.caption, design: .monospaced).weight(.semibold))
                     .foregroundStyle(settingsStore.value.accent.color)
 
-                HStack(spacing: 12) {
-                    Button("Previous Episode", systemImage: "backward.end.fill") { model.playPrevious() }
-                        .buttonStyle(.glass)
-                        .disabled(!model.hasPreviousEpisode)
-                    Button("Next Episode", systemImage: "forward.end.fill") { model.playNext() }
-                        .buttonStyle(.glass)
-                        .disabled(!model.hasNextEpisode)
+                if let media = model.media, media.height > 0, media.height < 720 {
+                    Label("Low source quality", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.orange)
                 }
 
                 if model.isLoading { ProgressView("Preparing best quality") }
@@ -453,6 +450,18 @@ private struct NativePlayerOverlay: View {
         VStack {
             HStack(spacing: 10) {
                 Spacer()
+                Button { model.playPrevious() } label: {
+                    Image(systemName: "backward.end.fill")
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.circle)
+                .disabled(!model.hasPreviousEpisode)
+                Button { model.playNext() } label: {
+                    Image(systemName: "forward.end.fill")
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.circle)
+                .disabled(!model.hasNextEpisode)
                 Button { model.toggleMute() } label: {
                     Image(systemName: model.isMuted ? "speaker.slash.fill" : "speaker.wave.3.fill")
                 }
