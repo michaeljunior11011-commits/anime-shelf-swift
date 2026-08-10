@@ -418,38 +418,30 @@ private struct VideoStage: View {
     let showFullScreen: (() -> Void)?
 
     var body: some View {
-        SystemVideoPlayer(model: model, showFullScreen: showFullScreen)
+        ZStack {
+            SystemVideoPlayer(player: model.player)
+            NativePlayerOverlay(model: model, showFullScreen: showFullScreen)
+                .zIndex(10)
+        }
         .background(.black)
     }
 }
 
 private struct SystemVideoPlayer: UIViewControllerRepresentable {
-    @ObservedObject var model: PlayerViewModel
-    let showFullScreen: (() -> Void)?
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    let player: AVPlayer
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
-        controller.player = model.player
+        controller.player = player
         controller.showsPlaybackControls = true
         controller.allowsPictureInPicturePlayback = true
         controller.canStartPictureInPictureAutomaticallyFromInline = true
         controller.updatesNowPlayingInfoCenter = true
-        let hosting = UIHostingController(rootView: NativePlayerOverlay(model: model, showFullScreen: showFullScreen))
-        hosting.view.backgroundColor = .clear
-        controller.customOverlayViewController = hosting
-        context.coordinator.hosting = hosting
         return controller
     }
 
     func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
-        controller.player = model.player
-        context.coordinator.hosting?.rootView = NativePlayerOverlay(model: model, showFullScreen: showFullScreen)
-    }
-
-    final class Coordinator {
-        var hosting: UIHostingController<NativePlayerOverlay>?
+        controller.player = player
     }
 }
 
