@@ -409,6 +409,12 @@ struct FilterOption: Codable, Identifiable, Hashable, Sendable {
             ?? values.flexibleStringIfPresent(forKey: .id)
             ?? option
     }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(option, forKey: .option)
+        try values.encode(value, forKey: .value)
+    }
 }
 
 struct FilterOptionGroup: Decodable, Sendable {
