@@ -17,19 +17,32 @@ const helperSource = `import SwiftUI
 import UIKit
 import Network
 
-@MainActor
-final class PreviewTCPFrameSender {
+final class PreviewTCPFrameSender: @unchecked Sendable {
     private let connection = NWConnection(host: "127.0.0.1", port: 8787, using: .tcp)
-    private(set) var isReady = false
+    private let stateLock = NSLock()
+    private var ready = false
+    var isReady: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return ready
+    }
 
     init() {
         connection.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
-            if case .ready = state { self.isReady = true }
-            if case .failed = state { self.isReady = false }
-            if case .cancelled = state { self.isReady = false }
+            switch state {
+            case .ready: self.setReady(true)
+            case .failed, .cancelled: self.setReady(false)
+            default: break
+            }
         }
         connection.start(queue: .main)
+    }
+
+    private func setReady(_ value: Bool) {
+        stateLock.lock()
+        ready = value
+        stateLock.unlock()
     }
 
     func send(header: [String: Any], jpeg: Data = Data()) -> Bool {
@@ -135,8 +148,8 @@ final class PreviewLiveStreamProbeView: UIView {
         if let ownWindow = window, ownWindow.isKeyWindow { return ownWindow }
         return UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
-            .flatMap(\.windows)
-            .first(where: \.isKeyWindow) ?? window
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow } ?? window
     }
 
     private func finish(reason: String) {
