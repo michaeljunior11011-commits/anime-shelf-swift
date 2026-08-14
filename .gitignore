@@ -2,6 +2,7 @@
 build/
 DerivedData/
 AnimeShelf.xcodeproj/
+.github/xcode-headless-preview/fixture/PreviewLab.xcodeproj/
 xcuserdata/
 *.ipa
 

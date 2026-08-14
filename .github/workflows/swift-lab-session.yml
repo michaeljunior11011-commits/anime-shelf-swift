@@ -1,0 +1,120 @@
+name: Swift Lab — Long Session
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  swift-lab:
+    runs-on: xcode-27
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Xcode 27 Beta 5 once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if xcrun --find mcp-server >/dev/null 2>&1; then
+            echo "DEVELOPER_DIR=$(xcode-select -p)" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          xip="$RUNNER_TEMP/Xcode_27_beta_5.xip"
+          root="$RUNNER_TEMP/XcodeBeta5"
+          mkdir -p "$root"
+          gh release download xcode-27-beta5-cache --repo "$GITHUB_REPOSITORY" --pattern 'Xcode_27_beta_5.xip' --dir "$RUNNER_TEMP"
+          echo '1f92c0fbb7268205e9b1f8061bf47db012a92e47729557c79ac053c9e5bd881a  '"$xip" | shasum -a 256 --check
+          xcodes install "27.0 Beta 5" --path "$xip" --directory "$root" --experimental-unxip
+          app="$(find "$root" -maxdepth 3 -type d -name '*.app' -print -quit)"
+          developer="$app/Contents/Developer"
+          sudo xcode-select --switch "$developer"
+          echo "DEVELOPER_DIR=$developer" >> "$GITHUB_ENV"
+
+      - name: Prepare one persistent preview session
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+          npm ci --prefix .github/xcode-headless-preview
+          project="$GITHUB_WORKSPACE/.github/xcode-headless-preview/fixture"
+          (cd "$project" && xcodegen generate)
+          git config user.name 'Swift Lab'
+          git config user.email 'swift-lab@users.noreply.github.com'
+          token="$(openssl rand -hex 16)"
+          echo "SWIFT_LAB_TOKEN=$token" >> "$GITHUB_ENV"
+          echo "PREVIEW_PROJECT_PATH=$project/PreviewLab.xcodeproj" >> "$GITHUB_ENV"
+          echo "PREVIEW_SOURCE_ROOT=$project/PreviewLab" >> "$GITHUB_ENV"
+          echo "SWIFT_LAB_OUTPUT=$RUNNER_TEMP/swift-lab-output" >> "$GITHUB_ENV"
+          sudo xcrun mcp-server enable --unsafe-always-allow-all-agents
+          xcrun mcp-server start
+
+      - name: Start editor and secure tunnel
+        shell: bash
+        run: |
+          set -euo pipefail
+          node .github/xcode-headless-preview/swift-lab-server.mjs > "$RUNNER_TEMP/swift-lab.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/swift-lab.pid"
+          for _ in {1..30}; do
+            curl -fsS "http://127.0.0.1:8080/$SWIFT_LAB_TOKEN/health" >/dev/null && break
+            sleep 1
+          done
+          curl -fsS "http://127.0.0.1:8080/$SWIFT_LAB_TOKEN/health" >/dev/null
+
+          archive="$RUNNER_TEMP/cloudflared.tgz"
+          case "$(uname -m)" in
+            arm64) cloudflared_asset='cloudflared-darwin-arm64.tgz' ;;
+            x86_64) cloudflared_asset='cloudflared-darwin-amd64.tgz' ;;
+            *) echo "Unsupported Mac architecture: $(uname -m)"; exit 1 ;;
+          esac
+          curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/$cloudflared_asset" -o "$archive"
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/cloudflared" tunnel --url http://127.0.0.1:8080 --no-autoupdate > "$RUNNER_TEMP/cloudflared.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/cloudflared.pid"
+          for _ in {1..45}; do
+            host="$(grep -Eo 'https://[-a-z0-9]+\.trycloudflare\.com' "$RUNNER_TEMP/cloudflared.log" | head -1 || true)"
+            [[ -n "$host" ]] && break
+            sleep 1
+          done
+          [[ -n "${host:-}" ]] || { cat "$RUNNER_TEMP/cloudflared.log"; exit 1; }
+          url="$host/$SWIFT_LAB_TOKEN/"
+          echo "## Swift Lab is ready" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "[Open Swift Lab]($url)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "The same Mac and Xcode server stay alive for this entire job." >> "$GITHUB_STEP_SUMMARY"
+          echo "SWIFT_LAB_URL=$url" >> "$GITHUB_ENV"
+
+      - name: Keep the same Mac alive for 5 hours 30 minutes
+        shell: bash
+        run: |
+          echo "Swift Lab: $SWIFT_LAB_URL"
+          end=$((SECONDS + 19800))
+          while (( SECONDS < end )); do
+            kill -0 "$(cat "$RUNNER_TEMP/swift-lab.pid")"
+            kill -0 "$(cat "$RUNNER_TEMP/cloudflared.pid")"
+            sleep 30
+          done
+
+      - name: Upload session logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-lab-session-logs
+          path: |
+            ${{ runner.temp }}/swift-lab.log
+            ${{ runner.temp }}/cloudflared.log
+          retention-days: 1
+
+      - name: Stop services
+        if: always()
+        shell: bash
+        run: |
+          [[ -f "$RUNNER_TEMP/swift-lab.pid" ]] && kill "$(cat "$RUNNER_TEMP/swift-lab.pid")" 2>/dev/null || true
+          [[ -f "$RUNNER_TEMP/cloudflared.pid" ]] && kill "$(cat "$RUNNER_TEMP/cloudflared.pid")" 2>/dev/null || true
+          xcrun mcp-server stop 2>/dev/null || true
