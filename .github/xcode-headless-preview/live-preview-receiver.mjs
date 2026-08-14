@@ -19,6 +19,8 @@ let lastFrameAt;
 let completed = false;
 let helperSummary;
 let videoResult;
+let activeSessionID;
+let ignoredForeignFrames = 0;
 
 const page = `<!doctype html>
 <html lang="en">
@@ -77,8 +79,8 @@ function percentile(values, fraction) {
 }
 
 function summary() {
-  const now = lastFrameAt ?? performance.now();
-  const durationSeconds = firstFrameAt ? Math.max(0.001, (now - firstFrameAt) / 1000) : 0;
+  const arrivalDurationSeconds = firstFrameAt && lastFrameAt ? Math.max(0.001, (lastFrameAt - firstFrameAt) / 1000) : 0;
+  const durationSeconds = helperSummary?.durationSeconds ?? frameMetrics.at(-1)?.elapsedSeconds ?? arrivalDurationSeconds;
   const capture = frameMetrics.map((item) => item.captureMs);
   const encode = frameMetrics.map((item) => item.encodeMs);
   const sizes = frameMetrics.map((item) => item.jpegBytes);
@@ -91,9 +93,12 @@ function summary() {
   });
   return {
     complete: completed,
+    activeSessionID,
+    ignoredForeignFrames,
     frameCount: frameMetrics.length,
     uniqueFrameCount: new Set(frameMetrics.map((item) => item.frameHash)).size,
     durationSeconds,
+    arrivalDurationSeconds,
     liveFPS: durationSeconds ? frameMetrics.length / durationSeconds : 0,
     latest: frameMetrics.at(-1),
     captureMs: summarize(capture),
@@ -135,6 +140,11 @@ async function finish(header) {
 }
 
 function publishFrame(header, jpeg) {
+  activeSessionID ??= header.sessionID;
+  if (header.sessionID !== activeSessionID) {
+    ignoredForeignFrames += 1;
+    return;
+  }
   const now = performance.now();
   firstFrameAt ??= now;
   lastFrameAt = now;
@@ -163,7 +173,7 @@ function parseConnection(socket) {
       const jpeg = buffer.subarray(headerEnd + 4, packetLength);
       buffer = buffer.subarray(packetLength);
       if (header.type === "frame") publishFrame(header, Buffer.from(jpeg));
-      if (header.type === "end") void finish(header);
+      if (header.type === "end" && header.sessionID === activeSessionID) void finish(header);
     }
   });
 }

@@ -71,6 +71,7 @@ struct PreviewLiveStreamProbe: UIViewRepresentable {
 @MainActor
 final class PreviewLiveStreamProbeView: UIView {
     private let sender = PreviewTCPFrameSender()
+    private let sessionID = UUID().uuidString
     private var displayLink: CADisplayLink?
     private var streamStartedAt: CFTimeInterval = 0
     private var waitingStartedAt = CACurrentMediaTime()
@@ -132,6 +133,7 @@ final class PreviewLiveStreamProbeView: UIView {
         let encodeMs = (CACurrentMediaTime() - encodeStart) * 1000
         let header: [String: Any] = [
             "type": "frame",
+            "sessionID": sessionID,
             "index": sentFrames,
             "elapsedSeconds": elapsed,
             "captureMs": captureMs,
@@ -158,6 +160,7 @@ final class PreviewLiveStreamProbeView: UIView {
         displayLink = nil
         _ = sender.send(header: [
             "type": "end",
+            "sessionID": sessionID,
             "reason": reason,
             "attemptedFrames": attemptedFrames,
             "sentFrames": sentFrames,
