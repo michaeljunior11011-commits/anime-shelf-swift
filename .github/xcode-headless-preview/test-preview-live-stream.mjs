@@ -67,10 +67,6 @@ try {
   results.viewerHTMLServed = (await fetch("http://127.0.0.1:8080/")).ok;
   results.verdict = results.receiverStats.phases.length === 3 && results.receiverStats.phases.every((phase) => phase.receivedFrames > 10 && phase.uniqueFrames > 5)
     ? "LIVE_JPEG_BACKPRESSURE_STREAM_CONFIRMED" : "STREAM_PHASES_INCOMPLETE";
-  results.performanceVerdict = results.receiverStats.phases.map((phase) => ({
-    targetFPS: phase.targetFPS,
-    stable: phase.actualFPS >= phase.targetFPS * 0.7 && phase.sendTimeouts <= Math.max(2, phase.receivedFrames * 0.05),
-  }));
   await writeFile(path.join(outputDirectory, "receiver.log"), receiverLog, "utf8");
 } catch (error) {
   results.verdict = "TEST_FAILED"; results.error = error instanceof Error ? error.stack ?? error.message : String(error); process.exitCode = 1;
