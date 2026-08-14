@@ -131,7 +131,7 @@ private final class BenchmarkEncoder: @unchecked Sendable {
                 "captureAttempts": captureSummary[index]["captureAttempts"] ?? 0,
                 "durationSeconds": captureSummary[index]["durationSeconds"] ?? 20.0,
                 "encodedFrames": samples.count,
-                "actualFPS": samples.count / 20.0,
+                "actualFPS": Double(samples.count) / 20.0,
                 "replacedPendingFrames": replaced[index],
                 "encodeFailures": encodeFailures[index],
                 "captureAverageMs": average(capture),
