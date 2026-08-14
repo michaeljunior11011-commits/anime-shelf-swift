@@ -1,0 +1,56 @@
+name: Xcode Preview Source Rate Probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  source-rate:
+    runs-on: xcode-27
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode 27 Beta 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! xcrun --find mcp-server >/dev/null 2>&1; then
+            xip="$RUNNER_TEMP/Xcode_27_beta_5.xip"; root="$RUNNER_TEMP/XcodeBeta5"; mkdir -p "$root"
+            gh release download xcode-27-beta5-private-cache --repo "$GITHUB_REPOSITORY" --pattern 'Xcode_27_beta_5.xip' --dir "$RUNNER_TEMP"
+            echo '1f92c0fbb7268205e9b1f8061bf47db012a92e47729557c79ac053c9e5bd881a  '"$xip" | shasum -a 256 --check
+            xcodes install "27.0 Beta 5" --path "$xip" --directory "$root" --experimental-unxip
+            app="$(find "$root" -maxdepth 3 -type d -name '*.app' -print -quit)"; sudo xcode-select --switch "$app/Contents/Developer"
+          fi
+          echo "DEVELOPER_DIR=$(xcode-select -p)" >> "$GITHUB_ENV"
+      - name: Prepare headless Preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+          npm ci --prefix .github/xcode-headless-preview
+          project="$GITHUB_WORKSPACE/.github/xcode-headless-preview/fixture"
+          (cd "$project" && xcodegen generate)
+          echo "PREVIEW_PROJECT_PATH=$project/PreviewLab.xcodeproj" >> "$GITHUB_ENV"
+          echo "PREVIEW_SOURCE_PATH=$project/PreviewLab/TestView.swift" >> "$GITHUB_ENV"
+          echo "PREVIEW_SOURCE_FILE=PreviewLab/TestView.swift" >> "$GITHUB_ENV"
+          sudo xcrun mcp-server enable --unsafe-always-allow-all-agents
+          xcrun mcp-server start
+          sleep 30
+      - name: Measure direct Preview frame sources
+        shell: bash
+        run: node .github/xcode-headless-preview/test-preview-source-rate.mjs "$RUNNER_TEMP/source-rate-output"
+      - name: Upload source-rate results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-source-rate-probe
+          path: ${{ runner.temp }}/source-rate-output
+          retention-days: 3
+      - name: Stop headless server
+        if: always()
+        shell: bash
+        run: xcrun mcp-server stop 2>/dev/null || true
