@@ -56,8 +56,42 @@ jobs:
             echo "needs_install=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Verify Apple secrets are configured
+      - name: Install Xcode 27 Beta 5 from private release
+        id: release_install
         if: steps.inspect.outputs.needs_install == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/xcode-beta5-output"
+          install_root="$RUNNER_TEMP/XcodeBeta5"
+          xip="$RUNNER_TEMP/Xcode_27_beta_5.xip"
+          mkdir -p "$install_root"
+
+          gh release download xcode-27-beta5-cache \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'Xcode_27_beta_5.xip' \
+            --dir "$RUNNER_TEMP"
+
+          echo '1f92c0fbb7268205e9b1f8061bf47db012a92e47729557c79ac053c9e5bd881a  '"$xip" | shasum -a 256 --check
+          xcodes install "27.0 Beta 5" \
+            --path "$xip" \
+            --directory "$install_root" \
+            --experimental-unxip 2>&1 | tee "$output/private-release-install.log"
+
+          xcode_app="$(find "$install_root" -maxdepth 3 -type d -name '*.app' -print -quit)"
+          [[ -n "$xcode_app" ]] || { echo 'No Xcode app was produced from the private release asset.'; exit 1; }
+          developer_dir="$xcode_app/Contents/Developer"
+          sudo xcode-select --switch "$developer_dir"
+          echo "DEVELOPER_DIR=$developer_dir" >> "$GITHUB_ENV"
+          echo "BETA5_XCODE_APP=$xcode_app" >> "$GITHUB_ENV"
+          xcodebuild -version | tee -a "$output/runner-diagnostics.md"
+          xcrun mcp-server --help > "$output/mcp-server-help.txt" 2>&1
+
+      - name: Verify Apple secrets are configured
+        if: steps.inspect.outputs.needs_install == 'true' && steps.release_install.outcome != 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -70,7 +104,7 @@ jobs:
           echo "::add-mask::$XCODES_PASSWORD"
 
       - name: Verify temporary 2FA mailbox access
-        if: steps.inspect.outputs.needs_install == 'true'
+        if: steps.inspect.outputs.needs_install == 'true' && steps.release_install.outcome != 'success'
         env:
           GH_TOKEN: ${{ secrets.OTP_MAILBOX_TOKEN }}
         shell: bash
@@ -83,7 +117,7 @@ jobs:
 
       - name: Download and install Xcode 27 Beta 5
         id: install
-        if: steps.inspect.outputs.needs_install == 'true'
+        if: steps.inspect.outputs.needs_install == 'true' && steps.release_install.outcome != 'success'
         continue-on-error: true
         shell: bash
         run: |
@@ -186,13 +220,13 @@ jobs:
           xcrun mcp-server --help > "$output/mcp-server-help.txt" 2>&1
 
       - name: Require successful Beta 5 installation
-        if: steps.inspect.outputs.needs_install == 'true' && steps.install.outcome != 'success'
+        if: steps.inspect.outputs.needs_install == 'true' && steps.release_install.outcome != 'success' && steps.install.outcome != 'success'
         run: |
           echo "Xcode 27 Beta 5 was not installed, so RenderPreview was not started."
           exit 1
 
       - name: Prepare temporary SwiftUI preview project
-        if: steps.inspect.outputs.needs_install == 'false' || steps.install.outcome == 'success'
+        if: steps.inspect.outputs.needs_install == 'false' || steps.release_install.outcome == 'success' || steps.install.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -207,7 +241,7 @@ jobs:
           echo "XCODE_MCP_MODE=headless" >> "$GITHUB_ENV"
 
       - name: Start headless Xcode MCP server
-        if: steps.inspect.outputs.needs_install == 'false' || steps.install.outcome == 'success'
+        if: steps.inspect.outputs.needs_install == 'false' || steps.release_install.outcome == 'success' || steps.install.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -216,12 +250,12 @@ jobs:
           xcrun mcp-server status | tee -a "$RUNNER_TEMP/xcode-beta5-output/runner-diagnostics.md"
 
       - name: Render A then B
-        if: (steps.inspect.outputs.needs_install == 'false' || steps.install.outcome == 'success') && inputs.test_mode == 'proof'
+        if: (steps.inspect.outputs.needs_install == 'false' || steps.release_install.outcome == 'success' || steps.install.outcome == 'success') && inputs.test_mode == 'proof'
         working-directory: .github/xcode-headless-preview
         run: node run-poc.mjs "$RUNNER_TEMP/xcode-beta5-output"
 
       - name: Run warm RenderPreview benchmark
-        if: (steps.inspect.outputs.needs_install == 'false' || steps.install.outcome == 'success') && inputs.test_mode == 'warm-benchmark'
+        if: (steps.inspect.outputs.needs_install == 'false' || steps.release_install.outcome == 'success' || steps.install.outcome == 'success') && inputs.test_mode == 'warm-benchmark'
         working-directory: .github/xcode-headless-preview
         run: node run-warm-benchmark.mjs "$RUNNER_TEMP/xcode-beta5-output"
 
