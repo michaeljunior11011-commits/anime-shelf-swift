@@ -2,10 +2,15 @@ import SwiftUI
 
 struct TestView: View {
     var body: some View {
-        Text("A")
+        ZStack {
+            Color.black.ignoresSafeArea()
+            Text("Swift Lab Live")
+                .font(.largeTitle.bold())
+                .foregroundStyle(.cyan)
+        }
     }
 }
 
-#Preview("Proof A") {
+#Preview {
     TestView()
 }
