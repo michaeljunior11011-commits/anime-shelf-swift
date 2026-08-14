@@ -17,6 +17,22 @@ private struct CapturedFrame: @unchecked Sendable {
     let windowBounds: String
 }
 
+private final class SendCompletionGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completed = false
+    private let completion: @Sendable (NWError?, Bool) -> Void
+
+    init(completion: @escaping @Sendable (NWError?, Bool) -> Void) { self.completion = completion }
+
+    func finish(error: NWError?, timedOut: Bool) {
+        lock.lock()
+        guard !completed else { lock.unlock(); return }
+        completed = true
+        lock.unlock()
+        completion(error, timedOut)
+    }
+}
+
 private final class PreviewJPEGStreamPipeline: @unchecked Sendable {
     private let sessionID: String
     private let connection = NWConnection(host: "127.0.0.1", port: 8787, using: .tcp)
@@ -31,6 +47,7 @@ private final class PreviewJPEGStreamPipeline: @unchecked Sendable {
     private var encodedByPhase: [Int: Int] = [:]
     private var encodeFailuresByPhase: [Int: Int] = [:]
     private var sendFailuresByPhase: [Int: Int] = [:]
+    private var sendTimeoutsByPhase: [Int: Int] = [:]
     private var sentByPhase: [Int: Int] = [:]
     private var encodeTimesByPhase: [Int: [Double]] = [:]
     private var sendTimesByPhase: [Int: [Double]] = [:]
@@ -95,19 +112,21 @@ private final class PreviewJPEGStreamPipeline: @unchecked Sendable {
             "jpegBytes": jpeg.count, "frameHash": jpeg.hashValue,
             "hierarchySucceeded": frame.hierarchySucceeded, "windowBounds": frame.windowBounds
         ]
-        sendPacket(header: header, jpeg: jpeg) { [weak self] error in
+        sendPacket(header: header, jpeg: jpeg) { [weak self] error, timedOut in
             guard let self else { return }
             self.processingQueue.async {
                 let networkSendMs = (CACurrentMediaTime() - sendStartMonotonic) * 1000
                 let endToEndSendMs = (CACurrentMediaTime() - frame.captureStartedMonotonic) * 1000
                 if error == nil { self.sentByPhase[frame.phaseIndex, default: 0] += 1 }
                 else { self.sendFailuresByPhase[frame.phaseIndex, default: 0] += 1 }
+                if timedOut { self.sendTimeoutsByPhase[frame.phaseIndex, default: 0] += 1 }
                 self.sendTimesByPhase[frame.phaseIndex, default: []].append(networkSendMs)
                 self.sendPacket(header: [
                     "type": "sendMetric", "sessionID": self.sessionID, "index": frame.index,
                     "phaseIndex": frame.phaseIndex, "targetFPS": frame.targetFPS,
-                    "networkSendMs": networkSendMs, "endToEndSendMs": endToEndSendMs
-                ], jpeg: Data(), completion: { _ in })
+                    "networkSendMs": networkSendMs, "endToEndSendMs": endToEndSendMs,
+                    "sendTimedOut": timedOut
+                ], jpeg: Data(), completion: { _, _ in })
                 self.completeCurrent()
             }
         }
@@ -139,7 +158,8 @@ private final class PreviewJPEGStreamPipeline: @unchecked Sendable {
                 "encodedFrames": encodedByPhase[phase, default: 0],
                 "sentFrames": sentByPhase[phase, default: 0],
                 "encodeFailures": encodeFailuresByPhase[phase, default: 0],
-                "sendFailures": sendFailuresByPhase[phase, default: 0]
+                "sendFailures": sendFailuresByPhase[phase, default: 0],
+                "sendTimeouts": sendTimeoutsByPhase[phase, default: 0]
             ]
         }
         stateLock.unlock()
@@ -148,7 +168,7 @@ private final class PreviewJPEGStreamPipeline: @unchecked Sendable {
             "reason": "completed-10-15-20-fps-phases",
             "phaseCaptureSummary": captureSummary,
             "pipelineSummary": ["phases": phases]
-        ], jpeg: Data(), completion: { _ in })
+        ], jpeg: Data(), completion: { _, _ in })
     }
 
     private func encodeJPEG(_ image: CGImage) -> Data? {
@@ -159,12 +179,14 @@ private final class PreviewJPEGStreamPipeline: @unchecked Sendable {
         return data as Data
     }
 
-    private func sendPacket(header: [String: Any], jpeg: Data, completion: @escaping @Sendable (NWError?) -> Void) {
-        guard let headerData = try? JSONSerialization.data(withJSONObject: header) else { completion(nil); return }
+    private func sendPacket(header: [String: Any], jpeg: Data, completion: @escaping @Sendable (NWError?, Bool) -> Void) {
+        guard let headerData = try? JSONSerialization.data(withJSONObject: header) else { completion(nil, false); return }
         var packet = Data()
         append(UInt32(headerData.count), to: &packet); packet.append(headerData)
         append(UInt32(jpeg.count), to: &packet); packet.append(jpeg)
-        connection.send(content: packet, completion: .contentProcessed(completion))
+        let gate = SendCompletionGate(completion: completion)
+        connection.send(content: packet, completion: .contentProcessed { error in gate.finish(error: error, timedOut: false) })
+        networkQueue.asyncAfter(deadline: .now() + .milliseconds(500)) { gate.finish(error: nil, timedOut: true) }
     }
 
     private func append(_ value: UInt32, to data: inout Data) {

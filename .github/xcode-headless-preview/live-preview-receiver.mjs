@@ -90,6 +90,7 @@ function summary() {
       replacedPendingFrames: pipelinePhase.replacedPendingFrames ?? 0,
       encodeFailures: pipelinePhase.encodeFailures ?? 0,
       sendFailures: pipelinePhase.sendFailures ?? 0,
+      sendTimeouts: pipelinePhase.sendTimeouts ?? 0,
       captureMs: aggregate(phaseFrames.map((item) => item.captureMs)),
       encodeMs: aggregate(phaseFrames.map((item) => item.encodeMs)),
       jpegBytes: aggregate(phaseFrames.map((item) => item.jpegBytes)),
