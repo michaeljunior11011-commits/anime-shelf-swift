@@ -30,8 +30,12 @@ try {
   const opened = await call(client, "XcodeOpenWorkspace", { path: projectPath }, 180_000);
   const render = call(client, "RenderPreview", { workspaceIdentifier: opened.workspaceIdentifier ?? projectPath, sourceFilePath, previewDefinitionIndexInFile: 0, timeout: 600 }, 660_000);
   await new Promise((r) => setTimeout(r, 12_000));
-  results.simctl.enumerate = await command(["simctl", "--set", "previews", "io", "enumerate"]);
   results.simctl.devices = await command(["simctl", "--set", "previews", "list", "devices"]);
+  const booted = results.simctl.devices.stdout.match(/\(([0-9A-F-]{36})\) \(Booted\)/i)?.[1];
+  results.simctl.previewDeviceUDID = booted ?? null;
+  results.simctl.enumerate = booted
+    ? await command(["simctl", "--set", "previews", "io", booted, "enumerate"])
+    : { code: null, stdout: "", stderr: "No booted Preview device was found." };
   results.renderResult = await render;
   results.probe = await waitForFile(path.join(outputDirectory, "source-rate-stats.json"), 180_000);
   results.verdict = "SOURCE_RATE_PROBE_COMPLETED";
