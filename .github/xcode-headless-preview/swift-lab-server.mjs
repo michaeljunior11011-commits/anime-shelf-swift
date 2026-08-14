@@ -53,6 +53,7 @@ const opened = await rawCall("XcodeOpenWorkspace", { path: projectPath }, 60_000
 const workspaceIdentifier = opened.workspaceIdentifier ?? projectPath;
 let queue = Promise.resolve();
 let latest = null;
+const renderJobs = new Map();
 
 function safeName(value) {
   const name = String(value ?? "");
@@ -138,10 +139,22 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === "POST" && route === "/api/render") {
       const body = await bodyJson(request);
+      const jobId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const job = { status: "queued", createdAt: Date.now() };
+      renderJobs.set(jobId, job);
       const task = queue.then(() => renderFile(body.name, String(body.content ?? "")));
       queue = task.catch(() => {});
-      const result = await task;
-      return json(response, 200, { ok: true, elapsedMs: result.elapsedMs, version: result.version });
+      task.then(
+        (result) => Object.assign(job, { status: "complete", elapsedMs: result.elapsedMs, version: result.version }),
+        (error) => Object.assign(job, { status: "error", error: error instanceof Error ? error.message : String(error) }),
+      );
+      setTimeout(() => renderJobs.delete(jobId), 15 * 60 * 1000);
+      return json(response, 202, { ok: true, jobId });
+    }
+    if (request.method === "GET" && route.startsWith("/api/render/")) {
+      const jobId = route.slice("/api/render/".length);
+      const job = renderJobs.get(jobId);
+      return job ? json(response, 200, job) : json(response, 404, { error: "Render job not found" });
     }
     if (request.method === "GET" && route === "/preview.png" && latest) {
       const image = await readFile(latest.path);
