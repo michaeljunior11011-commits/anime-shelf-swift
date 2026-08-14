@@ -4,24 +4,11 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: write
   contents: write
+  issues: write
 
 jobs:
-  verify-2fa-mailbox:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Verify the temporary 2FA mailbox
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh variable set APPLE_2FA_CODE --body MAILBOX_TEST --repo "$GITHUB_REPOSITORY"
-          [[ "$(gh variable get APPLE_2FA_CODE --repo "$GITHUB_REPOSITORY")" == MAILBOX_TEST ]]
-          gh variable delete APPLE_2FA_CODE --repo "$GITHUB_REPOSITORY"
-
   swift-lab:
-    needs: verify-2fa-mailbox
     runs-on: xcode-27
     timeout-minutes: 350
     env:
