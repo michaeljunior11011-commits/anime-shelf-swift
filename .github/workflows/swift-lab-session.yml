@@ -5,22 +5,19 @@ on:
 
 permissions:
   contents: write
-  issues: write
 
 jobs:
   swift-lab:
     runs-on: xcode-27
     timeout-minutes: 350
-    env:
-      XCODES_USERNAME: ${{ secrets.APPLE_ID }}
-      XCODES_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
-      OTP_GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Install Xcode 27 Beta 5 once
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -28,34 +25,18 @@ jobs:
             echo "DEVELOPER_DIR=$(xcode-select -p)" >> "$GITHUB_ENV"
             exit 0
           fi
-          [[ -n "$XCODES_USERNAME" && -n "$XCODES_PASSWORD" ]] || {
-            echo 'APPLE_ID and APPLE_ID_PASSWORD must be configured as Actions secrets.'
-            exit 1
-          }
+          xip="$RUNNER_TEMP/Xcode_27_beta_5.xip"
           root="$RUNNER_TEMP/XcodeBeta5"
           mkdir -p "$root"
-          python3 -m venv "$RUNNER_TEMP/otp-venv"
-          "$RUNNER_TEMP/otp-venv/bin/python" -m pip install --quiet --disable-pip-version-check pexpect
-          xcodes update
-          install_status=1
-          for attempt in 1 2 3 4; do
-            set +e
-            "$RUNNER_TEMP/otp-venv/bin/python" .github/xcode-headless-preview/install-with-2fa.py \
-              "$RUNNER_TEMP/xcodes-install.log" \
-              "$(command -v xcodes)" install "27.0 Beta 5" \
-              --directory "$root" \
-              --experimental-unxip
-            install_status=$?
-            set -e
-            [[ $install_status -eq 0 ]] && break
-            if grep -Eiq 'NetworkError|statusCode:[[:space:]]*5[0-9]{2}|non200StatusCode' "$RUNNER_TEMP/xcodes-install.log"; then
-              echo "Apple download service returned a temporary error; retrying inside this same Mac ($attempt/4)."
-              sleep $((attempt * 10))
-              continue
-            fi
-            break
-          done
-          [[ $install_status -eq 0 ]] || exit "$install_status"
+          gh release download xcode-27-beta5-private-cache \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'Xcode_27_beta_5.xip' \
+            --dir "$RUNNER_TEMP"
+          echo '1f92c0fbb7268205e9b1f8061bf47db012a92e47729557c79ac053c9e5bd881a  '"$xip" | shasum -a 256 --check
+          xcodes install "27.0 Beta 5" \
+            --path "$xip" \
+            --directory "$root" \
+            --experimental-unxip
           app="$(find "$root" -maxdepth 3 -type d -name '*.app' -print -quit)"
           [[ -n "$app" ]] || { echo 'Xcode installation completed without producing an app.'; exit 1; }
           developer="$app/Contents/Developer"
