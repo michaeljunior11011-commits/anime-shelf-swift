@@ -1,0 +1,21 @@
+name: PreviewLab
+options:
+  bundleIdPrefix: dev.codex
+  deploymentTarget:
+    iOS: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+targets:
+  PreviewLab:
+    type: application
+    platform: iOS
+    sources:
+      - path: PreviewLab
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.codex.PreviewLab
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        TARGETED_DEVICE_FAMILY: "1"

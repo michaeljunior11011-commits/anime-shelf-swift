@@ -1,4 +1,4 @@
-name: Xcode Headless Preview POC
+name: Xcode Preview POC
 
 on:
   workflow_dispatch:
@@ -8,20 +8,20 @@ permissions:
 
 jobs:
   render-preview:
-    name: Render SwiftUI preview without Xcode UI
+    name: Render SwiftUI preview through Xcode MCP
     runs-on: xcode-27
-    timeout-minutes: 20
+    timeout-minutes: 15
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Inspect Xcode 27 runner
+      - name: Inspect Xcode runner
         id: inspect
         shell: bash
         run: |
-          set -uo pipefail
-          output="$RUNNER_TEMP/xcode-headless-preview-output"
+          set -euo pipefail
+          output="$RUNNER_TEMP/xcode-preview-output"
           mkdir -p "$output"
 
           {
@@ -33,43 +33,80 @@ jobs:
             xcode-select -p
             xcodebuild -version
             echo
-            xcrun --find mcpbridge || true
+            xcrun --find mcpbridge
             xcrun --find mcp-server || true
             echo '```'
           } | tee "$output/runner-diagnostics.md" >> "$GITHUB_STEP_SUMMARY"
 
           if xcrun --find mcp-server >/dev/null 2>&1; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "mode=headless" >> "$GITHUB_OUTPUT"
           else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo >> "$GITHUB_STEP_SUMMARY"
-            echo "❌ This runner image does not contain Xcode 27 beta 5's headless MCP server." | tee "$output/report.md" >> "$GITHUB_STEP_SUMMARY"
+            echo "mode=xcode" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Install the small MCP test client
-        if: steps.inspect.outputs.available == 'true'
-        working-directory: .github/xcode-headless-preview
-        run: npm ci
+      - name: Install test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+          npm ci --prefix .github/xcode-headless-preview
 
-      - name: Enable Xcode headless MCP service
-        if: steps.inspect.outputs.available == 'true'
+      - name: Create temporary SwiftUI project
+        shell: bash
+        run: |
+          set -euo pipefail
+          project_root="$RUNNER_TEMP/PreviewLab"
+          cp -R .github/xcode-headless-preview/fixture "$project_root"
+          (cd "$project_root" && xcodegen generate)
+          echo "PREVIEW_PROJECT_PATH=$project_root/PreviewLab.xcodeproj" >> "$GITHUB_ENV"
+          echo "PREVIEW_SOURCE_PATH=$project_root/PreviewLab/TestView.swift" >> "$GITHUB_ENV"
+          echo "PREVIEW_SOURCE_FILE=PreviewLab/TestView.swift" >> "$GITHUB_ENV"
+
+      - name: Start Xcode 27 beta 5 headless server
+        if: steps.inspect.outputs.mode == 'headless'
         shell: bash
         run: |
           set -euo pipefail
           sudo xcrun mcp-server enable --unsafe-always-allow-all-agents
           xcrun mcp-server start
-          xcrun mcp-server status | tee -a "$RUNNER_TEMP/xcode-headless-preview-output/runner-diagnostics.md"
+          xcrun mcp-server status | tee -a "$RUNNER_TEMP/xcode-preview-output/runner-diagnostics.md"
+          echo "XCODE_MCP_MODE=headless" >> "$GITHUB_ENV"
 
-      - name: Create project and render A then B
-        if: steps.inspect.outputs.available == 'true'
+      - name: Start Xcode 27 beta 4 in the background
+        if: steps.inspect.outputs.mode == 'xcode'
+        shell: bash
+        run: |
+          set -euo pipefail
+          defaults write com.apple.dt.Xcode IDEAllowUnauthenticatedAgents -bool YES
+          xcode_app="$(dirname "$(dirname "$(xcode-select -p)")")"
+          open -a "$xcode_app" "$PREVIEW_PROJECT_PATH"
+
+          xcode_pid=""
+          for _ in {1..30}; do
+            xcode_pid="$(pgrep -x Xcode | head -1 || true)"
+            [[ -n "$xcode_pid" ]] && break
+            sleep 1
+          done
+          [[ -n "$xcode_pid" ]] || { echo "Xcode did not start."; exit 1; }
+
+          echo "MCP_XCODE_PID=$xcode_pid" >> "$GITHUB_ENV"
+          echo "XCODE_MCP_MODE=xcode" >> "$GITHUB_ENV"
+          {
+            echo
+            echo "Xcode PID: $xcode_pid"
+            ps -p "$xcode_pid" -o pid=,comm=
+            defaults read com.apple.dt.Xcode IDEAllowUnauthenticatedAgents || true
+          } | tee -a "$RUNNER_TEMP/xcode-preview-output/runner-diagnostics.md"
+
+      - name: List tools and render A then B
         working-directory: .github/xcode-headless-preview
-        run: node run-poc.mjs "$RUNNER_TEMP/xcode-headless-preview-output"
+        run: node run-poc.mjs "$RUNNER_TEMP/xcode-preview-output"
 
       - name: Publish proof summary
         if: always()
         shell: bash
         run: |
-          report="$RUNNER_TEMP/xcode-headless-preview-output/report.md"
+          report="$RUNNER_TEMP/xcode-preview-output/report.md"
           if [[ -f "$report" ]]; then
             cat "$report" >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -78,17 +115,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: xcode-headless-preview-proof
-          path: ${{ runner.temp }}/xcode-headless-preview-output
+          name: xcode-preview-proof
+          path: ${{ runner.temp }}/xcode-preview-output
           if-no-files-found: error
           retention-days: 7
 
-      - name: Stop Xcode headless MCP service
-        if: always() && steps.inspect.outputs.available == 'true'
-        run: xcrun mcp-server stop || true
-
-      - name: Require Xcode 27 beta 5 or newer
-        if: steps.inspect.outputs.available != 'true'
+      - name: Stop Xcode MCP processes
+        if: always()
+        shell: bash
         run: |
-          echo "The xcode-27 runner does not yet expose xcrun mcp-server."
-          exit 1
+          xcrun mcp-server stop 2>/dev/null || true
+          pkill -x Xcode 2>/dev/null || true
