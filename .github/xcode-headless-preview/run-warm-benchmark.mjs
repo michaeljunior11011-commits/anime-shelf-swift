@@ -15,9 +15,11 @@ const newSourceFilePath = "PreviewLab/Swift2000.swift";
 const reportPath = path.join(outputDirectory, "warm-benchmark.md");
 const jsonPath = path.join(outputDirectory, "warm-benchmark.json");
 const csvPath = path.join(outputDirectory, "warm-benchmark.csv");
+const benchmarkScope = process.env.BENCHMARK_SCOPE ?? "full";
 
 const results = {
   startedAt: new Date().toISOString(),
+  scope: benchmarkScope,
   projectPath,
   workspaceIdentifier: null,
   newFileCreationMs: null,
@@ -359,10 +361,12 @@ try {
   if (cold.error) throw new Error(`Cold preview failed: ${cold.error}`);
   await wait(5_000);
 
-  for (let index = 1; index <= 10; index += 1) {
-    writeMs = await saveThroughXcode(existingSourceFilePath, existingSource(String(index)));
-    await render({ phase: "existing-warm", label: `warm-${String(index).padStart(2, "0")}`, sourceFilePath: existingSourceFilePath, writeMs });
-    await wait(500);
+  if (benchmarkScope !== "new-file-only") {
+    for (let index = 1; index <= 10; index += 1) {
+      writeMs = await saveThroughXcode(existingSourceFilePath, existingSource(String(index)));
+      await render({ phase: "existing-warm", label: `warm-${String(index).padStart(2, "0")}`, sourceFilePath: existingSourceFilePath, writeMs });
+      await wait(500);
+    }
   }
 
   results.newFileCreationMs = await saveThroughXcode(newSourceFilePath, swift2000Source("Swift 2000"));

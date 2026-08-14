@@ -11,6 +11,7 @@ on:
         options:
           - proof
           - warm-benchmark
+          - new-file-benchmark
 
 permissions:
   actions: write
@@ -257,6 +258,13 @@ jobs:
       - name: Run warm RenderPreview benchmark
         if: (steps.inspect.outputs.needs_install == 'false' || steps.release_install.outcome == 'success' || steps.install.outcome == 'success') && inputs.test_mode == 'warm-benchmark'
         working-directory: .github/xcode-headless-preview
+        run: node run-warm-benchmark.mjs "$RUNNER_TEMP/xcode-beta5-output"
+
+      - name: Test live creation of Swift2000.swift
+        if: (steps.inspect.outputs.needs_install == 'false' || steps.release_install.outcome == 'success' || steps.install.outcome == 'success') && inputs.test_mode == 'new-file-benchmark'
+        working-directory: .github/xcode-headless-preview
+        env:
+          BENCHMARK_SCOPE: new-file-only
         run: node run-warm-benchmark.mjs "$RUNNER_TEMP/xcode-beta5-output"
 
       - name: Publish preview report

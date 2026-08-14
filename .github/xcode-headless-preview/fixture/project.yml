@@ -12,6 +12,7 @@ targets:
     platform: iOS
     sources:
       - path: PreviewLab
+        type: syncedFolder
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.codex.PreviewLab
