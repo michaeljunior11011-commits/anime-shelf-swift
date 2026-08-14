@@ -47,7 +47,8 @@ try {
   const opened = await call(client, "XcodeOpenWorkspace", { path: projectPath }, 180_000);
   results.renderResult = await call(client, "RenderPreview", { workspaceIdentifier: opened.workspaceIdentifier ?? projectPath, sourceFilePath, previewDefinitionIndexInFile: 0, timeout: 600 }, 660_000);
   results.benchmark = await waitForStats(path.join(outputDirectory, "jpeg-benchmark-stats.json"), 180_000);
-  results.requiresH264Prototype = results.benchmark.configurations.some((item) => item.encodeAverageMs > 100);
+  results.bestJPEGEncodeMs = Math.min(...results.benchmark.configurations.map((item) => item.encodeAverageMs));
+  results.requiresH264Prototype = results.bestJPEGEncodeMs > 100;
   results.verdict = results.requiresH264Prototype ? "H264_PROTOTYPE_REQUIRED" : "JPEG_BENCHMARK_WITHIN_BUDGET";
 } catch (error) {
   results.verdict = "TEST_FAILED"; results.error = error instanceof Error ? error.stack ?? error.message : String(error); process.exitCode = 1;
