@@ -2,6 +2,15 @@ name: Install Xcode 27 Beta 5 and Preview
 
 on:
   workflow_dispatch:
+    inputs:
+      test_mode:
+        description: Preview test to run after Xcode is ready
+        required: true
+        default: proof
+        type: choice
+        options:
+          - proof
+          - warm-benchmark
 
 permissions:
   actions: write
@@ -190,9 +199,14 @@ jobs:
           xcrun mcp-server status | tee -a "$RUNNER_TEMP/xcode-beta5-output/runner-diagnostics.md"
 
       - name: Render A then B
-        if: steps.inspect.outputs.needs_install == 'false' || steps.install.outcome == 'success'
+        if: (steps.inspect.outputs.needs_install == 'false' || steps.install.outcome == 'success') && inputs.test_mode == 'proof'
         working-directory: .github/xcode-headless-preview
         run: node run-poc.mjs "$RUNNER_TEMP/xcode-beta5-output"
+
+      - name: Run warm RenderPreview benchmark
+        if: (steps.inspect.outputs.needs_install == 'false' || steps.install.outcome == 'success') && inputs.test_mode == 'warm-benchmark'
+        working-directory: .github/xcode-headless-preview
+        run: node run-warm-benchmark.mjs "$RUNNER_TEMP/xcode-beta5-output"
 
       - name: Publish preview report
         if: always()
@@ -202,12 +216,16 @@ jobs:
           if [[ -f "$report" ]]; then
             cat "$report" >> "$GITHUB_STEP_SUMMARY"
           fi
+          benchmark="$RUNNER_TEMP/xcode-beta5-output/warm-benchmark.md"
+          if [[ -f "$benchmark" ]]; then
+            cat "$benchmark" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload installation logs and preview proof
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: xcode-beta5-install-and-preview-proof
+          name: xcode-beta5-${{ inputs.test_mode }}-results
           path: ${{ runner.temp }}/xcode-beta5-output
           if-no-files-found: error
           retention-days: 3
