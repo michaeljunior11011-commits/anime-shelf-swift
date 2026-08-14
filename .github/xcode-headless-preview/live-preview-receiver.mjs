@@ -99,7 +99,7 @@ function summary() {
       totalJPEGBytes: phaseFrames.reduce((sum, item) => sum + item.jpegBytes, 0),
     };
   });
-  return { complete: completed, activeSessionID: sessionID, ignoredForeignPackets: frames.length - selectedFrames.length, frameCount: selectedFrames.length, phases, helperSummary };
+  return { complete: completed, activeSessionID: sessionID, ignoredForeignPackets: ignoredForeignPackets + frames.length - selectedFrames.length, frameCount: selectedFrames.length, phases, helperSummary };
 }
 
 async function finish(header) {
@@ -114,6 +114,8 @@ async function finish(header) {
 }
 
 function publishFrame(header, jpeg) {
+  activeSessionID ??= header.sessionID;
+  if (header.sessionID !== activeSessionID) { ignoredForeignPackets += 1; return false; }
   const receivedEpochMs = Date.now();
   const enriched = {
     ...header,
@@ -125,6 +127,14 @@ function publishFrame(header, jpeg) {
   for (const response of clients) {
     try { response.write(prefix); response.write(jpeg); response.write("\r\n"); } catch { clients.delete(response); }
   }
+  return true;
+}
+
+function controlPacket(header) {
+  const body = Buffer.from(JSON.stringify(header));
+  const packet = Buffer.allocUnsafe(8 + body.length);
+  packet.writeUInt32BE(body.length, 0); body.copy(packet, 4); packet.writeUInt32BE(0, 4 + body.length);
+  return packet;
 }
 
 function parseConnection(socket) {
@@ -141,9 +151,11 @@ function parseConnection(socket) {
       const header = JSON.parse(buffer.subarray(4, headerEnd).toString("utf8"));
       const jpeg = Buffer.from(buffer.subarray(headerEnd + 4, packetLength));
       buffer = buffer.subarray(packetLength);
-      if (header.type === "frame") publishFrame(header, jpeg);
-      else if (header.type === "sendMetric") sendMetrics.push(header);
-      else if (header.type === "end" && header.phaseCaptureSummary?.length === 3) void finish(header);
+      if (header.type === "frame") {
+        if (publishFrame(header, jpeg)) socket.write(controlPacket({ type: "ack", sessionID: header.sessionID, index: header.index }));
+        else socket.destroy();
+      } else if (header.type === "sendMetric" && header.sessionID === activeSessionID) sendMetrics.push(header);
+      else if (header.type === "end" && header.sessionID === activeSessionID && header.phaseCaptureSummary?.length === 3) void finish(header);
     }
   });
 }

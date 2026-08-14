@@ -51,6 +51,8 @@ private final class PreviewJPEGStreamPipeline: @unchecked Sendable {
     private var sentByPhase: [Int: Int] = [:]
     private var encodeTimesByPhase: [Int: [Double]] = [:]
     private var sendTimesByPhase: [Int: [Double]] = [:]
+    private var receiveBuffer = Data()
+    private var ackGates: [Int: SendCompletionGate] = [:]
 
     init(sessionID: String) {
         self.sessionID = sessionID
@@ -62,6 +64,7 @@ private final class PreviewJPEGStreamPipeline: @unchecked Sendable {
             }
         }
         connection.start(queue: networkQueue)
+        receiveNext()
     }
 
     var isReady: Bool {
@@ -112,7 +115,7 @@ private final class PreviewJPEGStreamPipeline: @unchecked Sendable {
             "jpegBytes": jpeg.count, "frameHash": jpeg.hashValue,
             "hierarchySucceeded": frame.hierarchySucceeded, "windowBounds": frame.windowBounds
         ]
-        sendPacket(header: header, jpeg: jpeg) { [weak self] error, timedOut in
+        sendFramePacket(header: header, jpeg: jpeg, index: frame.index) { [weak self] error, timedOut in
             guard let self else { return }
             self.processingQueue.async {
                 let networkSendMs = (CACurrentMediaTime() - sendStartMonotonic) * 1000
@@ -187,6 +190,54 @@ private final class PreviewJPEGStreamPipeline: @unchecked Sendable {
         let gate = SendCompletionGate(completion: completion)
         connection.send(content: packet, completion: .contentProcessed { error in gate.finish(error: error, timedOut: false) })
         networkQueue.asyncAfter(deadline: .now() + .milliseconds(500)) { gate.finish(error: nil, timedOut: true) }
+    }
+
+    private func sendFramePacket(header: [String: Any], jpeg: Data, index: Int, completion: @escaping @Sendable (NWError?, Bool) -> Void) {
+        guard let headerData = try? JSONSerialization.data(withJSONObject: header) else { completion(nil, false); return }
+        var packet = Data()
+        append(UInt32(headerData.count), to: &packet); packet.append(headerData)
+        append(UInt32(jpeg.count), to: &packet); packet.append(jpeg)
+        let gate = SendCompletionGate(completion: completion)
+        stateLock.lock(); ackGates[index] = gate; stateLock.unlock()
+        connection.send(content: packet, completion: .contentProcessed { [weak self] error in
+            if let error { self?.finishAck(index: index, error: error, timedOut: false) }
+        })
+        networkQueue.asyncAfter(deadline: .now() + .milliseconds(500)) { [weak self] in
+            self?.finishAck(index: index, error: nil, timedOut: true)
+        }
+    }
+
+    private func finishAck(index: Int, error: NWError?, timedOut: Bool) {
+        stateLock.lock(); let gate = ackGates.removeValue(forKey: index); stateLock.unlock()
+        gate?.finish(error: error, timedOut: timedOut)
+    }
+
+    private func receiveNext() {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] content, _, isComplete, error in
+            guard let self else { return }
+            if let content { self.receiveBuffer.append(content); self.parseAcknowledgements() }
+            if !isComplete && error == nil { self.receiveNext() }
+        }
+    }
+
+    private func parseAcknowledgements() {
+        while receiveBuffer.count >= 8 {
+            let headerLength = Int(readUInt32(receiveBuffer, at: 0))
+            guard headerLength <= 1_048_576, receiveBuffer.count >= 8 + headerLength else { return }
+            let jpegLength = Int(readUInt32(receiveBuffer, at: 4 + headerLength))
+            let packetLength = 8 + headerLength + jpegLength
+            guard receiveBuffer.count >= packetLength else { return }
+            let headerData = receiveBuffer.subdata(in: 4..<(4 + headerLength))
+            receiveBuffer.removeSubrange(0..<packetLength)
+            if let header = try? JSONSerialization.jsonObject(with: headerData) as? [String: Any],
+               header["type"] as? String == "ack", let index = header["index"] as? Int {
+                finishAck(index: index, error: nil, timedOut: false)
+            }
+        }
+    }
+
+    private func readUInt32(_ data: Data, at offset: Int) -> UInt32 {
+        data[offset..<(offset + 4)].reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
     }
 
     private func append(_ value: UInt32, to data: inout Data) {
