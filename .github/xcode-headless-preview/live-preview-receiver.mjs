@@ -18,6 +18,13 @@ let ignoredForeignPackets = 0;
 let helperSummary;
 let completed = false;
 
+function selectedSessionID() {
+  if (activeSessionID) return activeSessionID;
+  const counts = new Map();
+  for (const frame of frames) counts.set(frame.sessionID, (counts.get(frame.sessionID) ?? 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+}
+
 const page = `<!doctype html>
 <html lang="en">
 <head>
@@ -60,12 +67,15 @@ function aggregate(values) {
 }
 
 function summary() {
+  const sessionID = selectedSessionID();
+  const selectedFrames = frames.filter((item) => item.sessionID === sessionID);
+  const selectedSends = sendMetrics.filter((item) => item.sessionID === sessionID);
   const phaseDefinitions = helperSummary?.phaseCaptureSummary ?? [];
-  const phaseIndexes = [...new Set([...phaseDefinitions.map((p) => p.phaseIndex), ...frames.map((f) => f.phaseIndex)])].sort((a, b) => a - b);
+  const phaseIndexes = [...new Set([...phaseDefinitions.map((p) => p.phaseIndex), ...selectedFrames.map((f) => f.phaseIndex)])].sort((a, b) => a - b);
   const phases = phaseIndexes.map((phaseIndex) => {
     const definition = phaseDefinitions.find((item) => item.phaseIndex === phaseIndex) ?? {};
-    const phaseFrames = frames.filter((item) => item.phaseIndex === phaseIndex);
-    const phaseSends = sendMetrics.filter((item) => item.phaseIndex === phaseIndex);
+    const phaseFrames = selectedFrames.filter((item) => item.phaseIndex === phaseIndex);
+    const phaseSends = selectedSends.filter((item) => item.phaseIndex === phaseIndex);
     const durationSeconds = definition.durationSeconds ?? phaseFrames.at(-1)?.phaseElapsedSeconds ?? 0;
     const pipelinePhase = helperSummary?.pipelineSummary?.phases?.find((item) => item.phaseIndex === phaseIndex) ?? {};
     return {
@@ -83,17 +93,17 @@ function summary() {
       captureMs: aggregate(phaseFrames.map((item) => item.captureMs)),
       encodeMs: aggregate(phaseFrames.map((item) => item.encodeMs)),
       jpegBytes: aggregate(phaseFrames.map((item) => item.jpegBytes)),
-      networkReceiveMs: aggregate(phaseFrames.map((item) => item.networkReceiveMs)),
-      endToEndMs: aggregate(phaseFrames.map((item) => item.endToEndMs)),
       networkSendMs: aggregate(phaseSends.map((item) => item.networkSendMs)),
+      endToEndMs: aggregate(phaseSends.map((item) => item.endToEndSendMs)),
       totalJPEGBytes: phaseFrames.reduce((sum, item) => sum + item.jpegBytes, 0),
     };
   });
-  return { complete: completed, activeSessionID, ignoredForeignPackets, frameCount: frames.length, phases, helperSummary };
+  return { complete: completed, activeSessionID: sessionID, ignoredForeignPackets: frames.length - selectedFrames.length, frameCount: selectedFrames.length, phases, helperSummary };
 }
 
 async function finish(header) {
   if (completed) return;
+  activeSessionID = header.sessionID;
   helperSummary = header;
   completed = true;
   await writeFile(path.join(outputDirectory, "receiver-stats.json"), JSON.stringify(summary(), null, 2), "utf8");
@@ -102,21 +112,11 @@ async function finish(header) {
   await writeFile(path.join(outputDirectory, "viewer.html"), page, "utf8");
 }
 
-function acceptSession(header) {
-  activeSessionID ??= header.sessionID;
-  if (header.sessionID === activeSessionID) return true;
-  ignoredForeignPackets += 1;
-  return false;
-}
-
 function publishFrame(header, jpeg) {
-  if (!acceptSession(header)) return;
   const receivedEpochMs = Date.now();
   const enriched = {
     ...header,
     receivedEpochMs,
-    networkReceiveMs: Math.max(0, receivedEpochMs - header.sendStartedEpochMs),
-    endToEndMs: Math.max(0, receivedEpochMs - header.captureStartedEpochMs),
   };
   frames.push(enriched);
   latestFrame = jpeg;
@@ -141,8 +141,8 @@ function parseConnection(socket) {
       const jpeg = Buffer.from(buffer.subarray(headerEnd + 4, packetLength));
       buffer = buffer.subarray(packetLength);
       if (header.type === "frame") publishFrame(header, jpeg);
-      else if (header.type === "sendMetric" && acceptSession(header)) sendMetrics.push(header);
-      else if (header.type === "end" && acceptSession(header)) void finish(header);
+      else if (header.type === "sendMetric") sendMetrics.push(header);
+      else if (header.type === "end" && header.phaseCaptureSummary?.length === 3) void finish(header);
     }
   });
 }

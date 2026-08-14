@@ -11,6 +11,7 @@ private struct CapturedFrame: @unchecked Sendable {
     let targetFPS: Int
     let phaseElapsedSeconds: Double
     let captureStartedEpochMs: Double
+    let captureStartedMonotonic: CFTimeInterval
     let captureMs: Double
     let hierarchySucceeded: Bool
     let windowBounds: String
@@ -98,13 +99,14 @@ private final class PreviewJPEGStreamPipeline: @unchecked Sendable {
             guard let self else { return }
             self.processingQueue.async {
                 let networkSendMs = (CACurrentMediaTime() - sendStartMonotonic) * 1000
+                let endToEndSendMs = (CACurrentMediaTime() - frame.captureStartedMonotonic) * 1000
                 if error == nil { self.sentByPhase[frame.phaseIndex, default: 0] += 1 }
                 else { self.sendFailuresByPhase[frame.phaseIndex, default: 0] += 1 }
                 self.sendTimesByPhase[frame.phaseIndex, default: []].append(networkSendMs)
                 self.sendPacket(header: [
                     "type": "sendMetric", "sessionID": self.sessionID, "index": frame.index,
                     "phaseIndex": frame.phaseIndex, "targetFPS": frame.targetFPS,
-                    "networkSendMs": networkSendMs
+                    "networkSendMs": networkSendMs, "endToEndSendMs": endToEndSendMs
                 ], jpeg: Data(), completion: { _ in })
                 self.completeCurrent()
             }
@@ -182,7 +184,6 @@ struct PreviewLiveStreamProbe: UIViewRepresentable {
 
 @MainActor
 final class PreviewLiveStreamProbeView: UIView {
-    private static var claimed = false
     private let sessionID = UUID().uuidString
     private lazy var pipeline = PreviewJPEGStreamPipeline(sessionID: sessionID)
     private let targets = [10, 15, 20]
@@ -199,8 +200,7 @@ final class PreviewLiveStreamProbeView: UIView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        guard window != nil, displayLink == nil, !Self.claimed else { return }
-        Self.claimed = true
+        guard window != nil, displayLink == nil else { return }
         let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 1, maximum: 20, preferred: 20)
         link.add(to: .main, forMode: .common)
@@ -232,6 +232,7 @@ final class PreviewLiveStreamProbeView: UIView {
         pipeline.submit(CapturedFrame(
             image: cgImage, index: frameIndex, phaseIndex: phaseIndex, targetFPS: targetFPS,
             phaseElapsedSeconds: phaseElapsed, captureStartedEpochMs: captureStartedEpochMs,
+            captureStartedMonotonic: captureStart,
             captureMs: captureMs, hierarchySucceeded: hierarchySucceeded,
             windowBounds: NSCoder.string(for: bounds)
         ))
