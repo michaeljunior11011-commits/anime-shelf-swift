@@ -25,6 +25,21 @@ if ! command -v xcodegen >/dev/null 2>&1; then
 fi
 xcodegen generate
 
+echo "Creating the temporary macOS login account..."
+REMOTE_USERNAME="remotemac"
+LAST_UID="$(dscl . -list /Users UniqueID | awk '$2 >= 500 { print $2 }' | sort -n | tail -n 1)"
+REMOTE_UID=$(( ${LAST_UID:-500} + 1 ))
+
+sudo dscl . -create "/Users/$REMOTE_USERNAME"
+sudo dscl . -create "/Users/$REMOTE_USERNAME" UserShell /bin/zsh
+sudo dscl . -create "/Users/$REMOTE_USERNAME" RealName "Remote Mac User"
+sudo dscl . -create "/Users/$REMOTE_USERNAME" UniqueID "$REMOTE_UID"
+sudo dscl . -create "/Users/$REMOTE_USERNAME" PrimaryGroupID 20
+sudo dscl . -create "/Users/$REMOTE_USERNAME" NFSHomeDirectory "/Users/$REMOTE_USERNAME"
+sudo dscl . -passwd "/Users/$REMOTE_USERNAME" "$REMOTE_MAC_PASSWORD"
+sudo dseditgroup -o edit -a "$REMOTE_USERNAME" -t user admin
+sudo createhomedir -c -u "$REMOTE_USERNAME" >/dev/null
+
 echo "Enabling the built-in macOS screen-sharing service..."
 sudo "$ARD_KICKSTART" -deactivate >/dev/null 2>&1 || true
 sudo "$ARD_KICKSTART" \
@@ -135,7 +150,8 @@ echo "desktop_url=$DESKTOP_URL" >> "$GITHUB_OUTPUT"
   echo
   echo "[افتح Xcode وmacOS من المتصفح]($DESKTOP_URL)"
   echo
-  echo "- عند ظهور نافذة كلمة المرور، استخدم كلمة المرور التي تم إعدادها لك."
+  echo "- اسم المستخدم: \`remotemac\`"
+  echo "- استخدم كلمة مرور سطح المكتب التي تم إعدادها لك."
   echo "- احفظ تعديلاتك بـ Commit وPush قبل إنهاء المهمة؛ الجهاز مؤقت."
   echo "- لإيقاف التكلفة فورًا، اضغط **Cancel workflow** عند الانتهاء."
 } >> "$GITHUB_STEP_SUMMARY"
