@@ -21,6 +21,7 @@ const results = {
   projectPath,
   workspaceIdentifier: null,
   newFileCreationMs: null,
+  recoveries: [],
   samples: [],
 };
 
@@ -134,6 +135,43 @@ async function saveThroughXcode(filePath, content) {
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+async function recoverPreview({ label, sourceFilePath, afterAttempt, failure }) {
+  const started = performance.now();
+  const recovery = {
+    label,
+    afterAttempt,
+    reason: /JIT executor|Could not connect to agent|Bootstrap timeout/i.test(failure) ? "preview-jit-timeout" : "render-preview-error",
+    action: "verify-workspace-read-source-wait-for-preview-respawn",
+    workspaceResponsive: false,
+    sourceReadable: false,
+  };
+
+  try {
+    const workspaces = await call("XcodeListWorkspaces", {}, 30_000);
+    const workspaceText = JSON.stringify(workspaces);
+    recovery.workspaceResponsive = workspaceText.includes(results.workspaceIdentifier) || workspaceText.includes(projectPath);
+
+    await call(
+      "XcodeRead",
+      {
+        workspaceIdentifier: results.workspaceIdentifier,
+        filePath: sourceFilePath,
+        limit: 40,
+      },
+      30_000,
+    );
+    recovery.sourceReadable = true;
+  } catch (error) {
+    recovery.healthCheckError = error instanceof Error ? error.message : String(error);
+  }
+
+  await wait(5_000);
+  recovery.durationMs = elapsedMs(started);
+  results.recoveries.push(recovery);
+  console.log(`RECOVERY ${label}: ${recovery.durationMs.toFixed(1)}ms reason=${recovery.reason} workspace=${recovery.workspaceResponsive} source=${recovery.sourceReadable}`);
+  return recovery;
+}
+
 async function render({ phase, label, sourceFilePath, writeMs }) {
   const isCold = phase === "cold";
   const timeoutSeconds = isCold ? 240 : 60;
@@ -159,19 +197,24 @@ async function render({ phase, label, sourceFilePath, writeMs }) {
       break;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      attempts.push({ attempt, status: "failed", durationMs: elapsedMs(attemptStarted), error: message });
+      const failedAttempt = { attempt, status: "failed", durationMs: elapsedMs(attemptStarted), error: message };
+      attempts.push(failedAttempt);
       console.log(`BENCHMARK ${label} attempt ${attempt} failed after ${attempts.at(-1).durationMs.toFixed(1)}ms`);
-      if (attempt < maxAttempts) await wait(3_000);
+      if (attempt < maxAttempts) {
+        failedAttempt.recovery = await recoverPreview({ label, sourceFilePath, afterAttempt: attempt, failure: message });
+      }
     }
   }
 
   const successfulAttempt = attempts.find((attempt) => attempt.status === "success");
+  const recoveryMs = Math.round(attempts.reduce((sum, attempt) => sum + (attempt.recovery?.durationMs ?? 0), 0) * 10) / 10;
   if (!successfulAttempt) {
     const sample = {
       phase,
       label,
       writeMs,
       renderMs: null,
+      recoveryMs,
       totalMs: Math.round((writeMs + elapsedMs(allAttemptsStarted)) * 10) / 10,
       imageName: null,
       bytes: null,
@@ -201,6 +244,7 @@ async function render({ phase, label, sourceFilePath, writeMs }) {
     label,
     writeMs,
     renderMs,
+    recoveryMs,
     totalMs: Math.round((writeMs + elapsedMs(allAttemptsStarted)) * 10) / 10,
     imageName,
     bytes: bytes.length,
@@ -239,10 +283,10 @@ function reportMarkdown(errorMessage = null) {
     "",
     "The project, workspace, MCP server, and MCP client stayed alive for every sample.",
     "",
-    "| Phase | Sample | Save (ms) | RenderPreview (ms) | Attempts | Total (ms) | PNG changed |",
-    "|---|---:|---:|---:|---:|---:|:---:|",
+    "| Phase | Sample | Save (ms) | RenderPreview success (ms) | Recovery (ms) | Attempts | End-to-end (ms) | PNG changed |",
+    "|---|---:|---:|---:|---:|---:|---:|:---:|",
     ...results.samples.map((sample) =>
-      `| ${sample.phase} | ${sample.label} | ${sample.writeMs.toFixed(1)} | ${Number.isFinite(sample.renderMs) ? sample.renderMs.toFixed(1) : "FAILED"} | ${sample.attempts.length} | ${sample.totalMs.toFixed(1)} | ${sample.changedFromPrevious === null ? "n/a" : sample.changedFromPrevious ? "yes" : "NO"} |`,
+      `| ${sample.phase} | ${sample.label} | ${sample.writeMs.toFixed(1)} | ${Number.isFinite(sample.renderMs) ? sample.renderMs.toFixed(1) : "FAILED"} | ${sample.recoveryMs.toFixed(1)} | ${sample.attempts.length} | ${sample.totalMs.toFixed(1)} | ${sample.changedFromPrevious === null ? "n/a" : sample.changedFromPrevious ? "yes" : "NO"} |`,
     ),
     "",
   ];
@@ -274,12 +318,13 @@ function reportMarkdown(errorMessage = null) {
 }
 
 function csvText() {
-  const header = "phase,label,write_ms,render_ms,attempts,total_ms,image,bytes,sha256,changed_from_previous,error";
+  const header = "phase,label,write_ms,render_ms,recovery_ms,attempts,total_ms,image,bytes,sha256,changed_from_previous,error";
   const rows = results.samples.map((sample) => [
     sample.phase,
     sample.label,
     sample.writeMs,
     sample.renderMs ?? "",
+    sample.recoveryMs,
     sample.attempts.length,
     sample.totalMs,
     sample.imageName ?? "",
@@ -301,7 +346,7 @@ try {
   await client.connect(transport, { timeout: 30_000 });
   connected = true;
   const { tools } = await client.listTools(undefined, { timeout: 30_000 });
-  const requiredTools = ["XcodeOpenWorkspace", "XcodeWrite", "RenderPreview"];
+  const requiredTools = ["XcodeOpenWorkspace", "XcodeListWorkspaces", "XcodeRead", "XcodeWrite", "RenderPreview"];
   for (const required of requiredTools) {
     if (!tools.some((tool) => tool.name === required)) throw new Error(`${required} is missing from tools/list.`);
   }
