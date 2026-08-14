@@ -1,0 +1,50 @@
+name: Remote macOS + Xcode
+
+on:
+  workflow_dispatch:
+    inputs:
+      session_minutes:
+        description: "مدة الجلسة بالدقائق"
+        required: true
+        default: "120"
+        type: choice
+        options:
+          - "30"
+          - "60"
+          - "120"
+          - "180"
+          - "300"
+          - "340"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: remote-macos-desktop
+  cancel-in-progress: false
+
+jobs:
+  desktop:
+    name: Xcode desktop
+    runs-on: macos-26
+    timeout-minutes: 355
+
+    steps:
+      - name: Download the project
+        uses: actions/checkout@v4
+
+      - name: Configure Git for saving changes
+        run: |
+          git config user.name "Remote macOS Session"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Prepare macOS, Xcode, and remote desktop
+        id: remote
+        env:
+          REMOTE_MAC_PASSWORD: ${{ secrets.REMOTE_MAC_PASSWORD }}
+        run: bash .github/scripts/setup-remote-macos.sh
+
+      - name: Keep the desktop available
+        env:
+          SESSION_MINUTES: ${{ inputs.session_minutes }}
+        run: bash .github/scripts/keep-remote-macos-alive.sh
