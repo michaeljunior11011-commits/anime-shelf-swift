@@ -112,7 +112,7 @@ final class PreviewCaptureProbeView: UIView {
                         "isHidden": item.isHidden,
                         "alpha": item.alpha,
                         "level": item.windowLevel.rawValue,
-                        "bounds": NSStringFromCGRect(item.bounds),
+                        "bounds": NSCoder.string(for: item.bounds),
                         "rootViewController": item.rootViewController.map { NSStringFromClass(type(of: $0)) } ?? "nil",
                         "containsProbe": item === self.window
                     ] as [String: Any]
@@ -125,7 +125,7 @@ final class PreviewCaptureProbeView: UIView {
             "connectedSceneCount": scenes.count,
             "scenes": sceneDescriptions,
             "probeWindowClass": window.map { NSStringFromClass(type(of: $0)) } ?? "nil",
-            "probeWindowBounds": window.map { NSStringFromCGRect($0.bounds) } ?? "nil",
+            "probeWindowBounds": window.map { NSCoder.string(for: $0.bounds) } ?? "nil",
             "temporaryDirectory": outputDirectory.path
         ]
         if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]) {
