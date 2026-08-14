@@ -4,7 +4,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # Draft release assets require write-level repository metadata access.
+  contents: write
 
 jobs:
   framebuffer-test:
