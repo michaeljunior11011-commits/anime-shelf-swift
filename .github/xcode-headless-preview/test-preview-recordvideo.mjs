@@ -54,9 +54,18 @@ try {
   let recordStdout = ""; let recordStderr = ""; recording.stdout.on("data", (c) => recordStdout += c); recording.stderr.on("data", (c) => recordStderr += c);
   await sleep(4000); await progressiveProbe(videoPath); await enumerate(udid, "recording-before-swift-change");
   await copyFile(after, fixturePath); await sleep(500);
-  const afterRenderPromise = call(client, "RenderPreview", { workspaceIdentifier, sourceFilePath, previewDefinitionIndexInFile: 0, timeout: 600 }, 660_000);
+  // A recording must never leave the job waiting indefinitely for a Preview
+  // refresh.  Observe the request for one minute, then close and analyse the
+  // video even if the Preview service is still blocked.
+  let afterRenderSettled = false;
+  const afterRenderPromise = call(client, "RenderPreview", { workspaceIdentifier, sourceFilePath, previewDefinitionIndexInFile: 0, timeout: 600 }, 660_000)
+    .then((value) => { afterRenderSettled = true; return { status: "completed", value }; })
+    .catch((error) => { afterRenderSettled = true; return { status: "failed", error: error instanceof Error ? error.message : String(error) }; });
   for (let i = 0; i < 6; i += 1) { await sleep(3000); await progressiveProbe(videoPath); await enumerate(udid, `recording-update-poll-${i + 1}`); }
-  results.afterRender = await afterRenderPromise;
+  results.afterRender = await Promise.race([
+    afterRenderPromise,
+    sleep(42_000).then(() => ({ status: "pending-after-60-second-observation" })),
+  ]);
   await sleep(5000); await progressiveProbe(videoPath); await enumerate(udid, "recording-after-preview-update");
   recording.kill("SIGINT");
   results.recording = await new Promise((resolve) => recording.on("close", (code, signal) => resolve({ code, signal, stdout: recordStdout, stderr: recordStderr })));
