@@ -1,0 +1,202 @@
+name: Install Xcode 27 Beta 5 and Preview
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install-and-render:
+    name: Download Beta 5 and render SwiftUI preview
+    runs-on: xcode-27
+    timeout-minutes: 75
+    env:
+      XCODES_USERNAME: ${{ secrets.APPLE_ID }}
+      XCODES_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Inspect runner and available space
+        id: inspect
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/xcode-beta5-output"
+          mkdir -p "$output"
+
+          {
+            echo "# Xcode 27 Beta 5 installation proof"
+            echo
+            echo '```text'
+            sw_vers
+            xcodebuild -version
+            xcodes version
+            df -h / "$RUNNER_TEMP"
+            echo '```'
+          } | tee "$output/runner-diagnostics.md" >> "$GITHUB_STEP_SUMMARY"
+
+          if xcrun --find mcp-server >/dev/null 2>&1; then
+            echo "needs_install=false" >> "$GITHUB_OUTPUT"
+            echo "DEVELOPER_DIR=$(xcode-select -p)" >> "$GITHUB_ENV"
+          else
+            echo "needs_install=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify Apple secrets are configured
+        if: steps.inspect.outputs.needs_install == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$XCODES_USERNAME" || -z "$XCODES_PASSWORD" ]]; then
+            echo "APPLE_ID and APPLE_ID_PASSWORD must be configured as GitHub Actions secrets." \
+              | tee -a "$RUNNER_TEMP/xcode-beta5-output/report.md" "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "::add-mask::$XCODES_USERNAME"
+          echo "::add-mask::$XCODES_PASSWORD"
+
+      - name: Download and install Xcode 27 Beta 5
+        id: install
+        if: steps.inspect.outputs.needs_install == 'true'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/xcode-beta5-output"
+          install_root="$RUNNER_TEMP/XcodeBeta5"
+          mkdir -p "$install_root"
+          current_log="$output/xcodes-current.log"
+          fallback_log="$output/xcodes-1.6.2.log"
+
+          xcodes update 2>&1 | tee "$output/xcodes-update.log"
+          xcodes list 2>&1 | tee "$output/xcodes-list.log"
+          if ! grep -Eiq '27(\.0){0,2}[[:space:]]+Beta[[:space:]]+5' "$output/xcodes-list.log"; then
+            echo "Xcode 27 Beta 5 was not present in the xcodes catalog." \
+              | tee "$output/report.md" >> "$GITHUB_STEP_SUMMARY"
+            exit 10
+          fi
+
+          set +e
+          xcodes install "27.0 Beta 5" \
+            --directory "$install_root" \
+            --experimental-unxip </dev/null 2>&1 | tee "$current_log"
+          install_status=${PIPESTATUS[0]}
+          set -e
+
+          if [[ $install_status -ne 0 ]]; then
+            if grep -Eiq 'Enter .*6 digit|verification code|choose a phone number|security code' "$current_log"; then
+              echo "xcodes requested an interactive Apple two-factor authentication code. The workflow stopped without bypassing it." \
+                | tee "$output/report.md" >> "$GITHUB_STEP_SUMMARY"
+              exit 20
+            fi
+
+            if grep -Eiq '403|Unauthorized|authentication|two-factor' "$current_log"; then
+              echo "Current xcodes authentication failed; trying the documented 1.6.2 fallback." \
+                | tee -a "$output/report.md" >> "$GITHUB_STEP_SUMMARY"
+              fallback_archive="$RUNNER_TEMP/xcodes-1.6.2.tar.gz"
+              fallback_root="$RUNNER_TEMP/xcodes-1.6.2"
+              curl --fail --location --silent --show-error \
+                'https://github.com/XcodesOrg/xcodes/releases/download/1.6.2/xcodes-1.6.2.macos.arm64.tar.gz' \
+                --output "$fallback_archive"
+              mkdir -p "$fallback_root"
+              tar -xzf "$fallback_archive" -C "$fallback_root"
+              fallback_bin="$fallback_root/xcodes/1.6.2/bin/xcodes"
+              "$fallback_bin" version | tee -a "$fallback_log"
+
+              set +e
+              "$fallback_bin" install "27.0 Beta 5" \
+                --directory "$install_root" \
+                --experimental-unxip </dev/null 2>&1 | tee -a "$fallback_log"
+              fallback_status=${PIPESTATUS[0]}
+              set -e
+
+              if [[ $fallback_status -ne 0 ]]; then
+                if grep -Eiq 'Enter .*6 digit|verification code|choose a phone number|security code' "$fallback_log"; then
+                  echo "xcodes 1.6.2 also requested an interactive two-factor authentication code. The workflow stopped." \
+                    | tee -a "$output/report.md" >> "$GITHUB_STEP_SUMMARY"
+                else
+                  echo "xcodes 1.6.2 could not install Xcode Beta 5. See the uploaded fallback log." \
+                    | tee -a "$output/report.md" >> "$GITHUB_STEP_SUMMARY"
+                fi
+                exit 21
+              fi
+            else
+              echo "xcodes failed before installation for a non-authentication reason. See the uploaded log." \
+                | tee "$output/report.md" >> "$GITHUB_STEP_SUMMARY"
+              exit "$install_status"
+            fi
+          fi
+
+          xcode_app="$(find "$install_root" -maxdepth 3 -type d -name '*.app' -print -quit)"
+          if [[ -z "$xcode_app" ]]; then
+            echo "The download command completed, but no Xcode app was found in the installation directory." \
+              | tee "$output/report.md" >> "$GITHUB_STEP_SUMMARY"
+            exit 30
+          fi
+
+          developer_dir="$xcode_app/Contents/Developer"
+          sudo xcode-select --switch "$developer_dir"
+          echo "DEVELOPER_DIR=$developer_dir" >> "$GITHUB_ENV"
+          echo "BETA5_XCODE_APP=$xcode_app" >> "$GITHUB_ENV"
+          xcodebuild -version | tee -a "$output/runner-diagnostics.md"
+          xcrun mcp-server --help > "$output/mcp-server-help.txt" 2>&1
+
+      - name: Require successful Beta 5 installation
+        if: steps.inspect.outputs.needs_install == 'true' && steps.install.outcome != 'success'
+        run: |
+          echo "Xcode 27 Beta 5 was not installed, so RenderPreview was not started."
+          exit 1
+
+      - name: Prepare temporary SwiftUI preview project
+        if: steps.inspect.outputs.needs_install == 'false' || steps.install.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+          npm ci --prefix .github/xcode-headless-preview
+          project_root="$RUNNER_TEMP/PreviewLab"
+          cp -R .github/xcode-headless-preview/fixture "$project_root"
+          (cd "$project_root" && xcodegen generate)
+          echo "PREVIEW_PROJECT_PATH=$project_root/PreviewLab.xcodeproj" >> "$GITHUB_ENV"
+          echo "PREVIEW_SOURCE_PATH=$project_root/PreviewLab/TestView.swift" >> "$GITHUB_ENV"
+          echo "PREVIEW_SOURCE_FILE=PreviewLab/TestView.swift" >> "$GITHUB_ENV"
+          echo "XCODE_MCP_MODE=headless" >> "$GITHUB_ENV"
+
+      - name: Start headless Xcode MCP server
+        if: steps.inspect.outputs.needs_install == 'false' || steps.install.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo xcrun mcp-server enable --unsafe-always-allow-all-agents
+          xcrun mcp-server start
+          xcrun mcp-server status | tee -a "$RUNNER_TEMP/xcode-beta5-output/runner-diagnostics.md"
+
+      - name: Render A then B
+        if: steps.inspect.outputs.needs_install == 'false' || steps.install.outcome == 'success'
+        working-directory: .github/xcode-headless-preview
+        run: node run-poc.mjs "$RUNNER_TEMP/xcode-beta5-output"
+
+      - name: Publish preview report
+        if: always()
+        shell: bash
+        run: |
+          report="$RUNNER_TEMP/xcode-beta5-output/report.md"
+          if [[ -f "$report" ]]; then
+            cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload installation logs and preview proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcode-beta5-install-and-preview-proof
+          path: ${{ runner.temp }}/xcode-beta5-output
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Stop Xcode MCP server
+        if: always()
+        run: xcrun mcp-server stop 2>/dev/null || true
