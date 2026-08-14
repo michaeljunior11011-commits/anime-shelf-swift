@@ -15,7 +15,7 @@ jobs:
     env:
       XCODES_USERNAME: ${{ secrets.APPLE_ID }}
       XCODES_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
-      OTP_GITHUB_TOKEN: ${{ github.token }}
+      OTP_GITHUB_TOKEN: ${{ secrets.OTP_MAILBOX_TOKEN }}
 
     steps:
       - name: Check out repository
@@ -63,7 +63,7 @@ jobs:
       - name: Verify temporary 2FA mailbox access
         if: steps.inspect.outputs.needs_install == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.OTP_MAILBOX_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
