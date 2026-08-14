@@ -103,8 +103,11 @@ def wait_for_code(timeout_seconds: int = 600) -> str:
 class Tee:
     def __init__(self, path: str):
         self.file = open(path, "w", encoding="utf-8")
+        self.last_write = time.monotonic()
 
     def write(self, data: str):
+        if data:
+            self.last_write = time.monotonic()
         sys.stdout.write(data)
         sys.stdout.flush()
         self.file.write(data)
@@ -136,9 +139,16 @@ def main() -> int:
 
     try:
         while True:
-            match = child.expect([r"Enter (?:the )?6 digit code[^:]*:", pexpect.EOF])
+            match = child.expect(
+                [r"Enter (?:the )?6 digit code[^:]*:", pexpect.EOF, pexpect.TIMEOUT],
+                timeout=60,
+            )
             if match == 1:
                 break
+            if match == 2:
+                if time.monotonic() - log.last_write >= 180:
+                    raise TimeoutError("xcodes produced no output for three minutes.")
+                continue
             code = wait_for_code()
             child.sendline(code)
     except Exception as error:
