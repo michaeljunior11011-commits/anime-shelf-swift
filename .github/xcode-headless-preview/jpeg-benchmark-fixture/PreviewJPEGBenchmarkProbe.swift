@@ -51,13 +51,13 @@ private final class BenchmarkEncoder: @unchecked Sendable {
     private var processing = false
     private var pending: CapturedBenchmarkFrame?
     private var finishCaptureSummary: [[String: Any]]?
-    private var metrics: [[String: Any]]
+    private var metrics: [[[String: Any]]]
     private var replaced: [Int]
     private var encodeFailures: [Int]
 
     init(configurations: [JPEGConfiguration]) {
         self.configurations = configurations
-        self.metrics = Array(repeating: [], count: configurations.count)
+        self.metrics = Array(repeating: [[String: Any]](), count: configurations.count)
         self.replaced = Array(repeating: 0, count: configurations.count)
         self.encodeFailures = Array(repeating: 0, count: configurations.count)
     }
