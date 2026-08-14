@@ -60,7 +60,7 @@ jobs:
           set -euo pipefail
           node .github/xcode-headless-preview/swift-lab-server.mjs > "$RUNNER_TEMP/swift-lab.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/swift-lab.pid"
-          for _ in {1..30}; do
+          for _ in {1..210}; do
             curl -fsS "http://127.0.0.1:8080/$SWIFT_LAB_TOKEN/health" >/dev/null && break
             sleep 1
           done

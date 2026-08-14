@@ -32,7 +32,7 @@ const transport = new StdioClientTransport({
 transport.stderr?.on("data", (chunk) => process.stderr.write(chunk));
 
 const client = new Client({ name: "swift-lab-live", version: "1.0.0" });
-await client.connect(transport, { timeout: 30_000 });
+await client.connect(transport, { timeout: 180_000 });
 
 const rawCall = async (name, args, timeout = 90_000) => {
   const raw = await client.request(
