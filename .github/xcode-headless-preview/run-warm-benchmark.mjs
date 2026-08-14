@@ -122,30 +122,78 @@ async function saveDirectly(filePath, content) {
   return elapsedMs(started);
 }
 
-async function render({ phase, label, sourceFilePath, writeMs }) {
+async function saveThroughXcode(filePath, content) {
   const started = performance.now();
-  const response = await call(
-    "RenderPreview",
-    {
-      workspaceIdentifier: results.workspaceIdentifier,
-      sourceFilePath,
-      previewDefinitionIndexInFile: 0,
-      timeout: 240,
-    },
-    300_000,
+  await call(
+    "XcodeWrite",
+    { workspaceIdentifier: results.workspaceIdentifier, filePath, content },
+    60_000,
   );
-  const renderMs = elapsedMs(started);
-  const snapshotPath = findSnapshotPath(response);
-  if (!snapshotPath) {
-    throw new Error(`${label} did not return a previewSnapshotPath: ${JSON.stringify(response)}`);
+  return elapsedMs(started);
+}
+
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+async function render({ phase, label, sourceFilePath, writeMs }) {
+  const isCold = phase === "cold";
+  const timeoutSeconds = isCold ? 240 : 60;
+  const maxAttempts = isCold ? 1 : 2;
+  const allAttemptsStarted = performance.now();
+  const attempts = [];
+  let response;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const attemptStarted = performance.now();
+    try {
+      response = await call(
+        "RenderPreview",
+        {
+          workspaceIdentifier: results.workspaceIdentifier,
+          sourceFilePath,
+          previewDefinitionIndexInFile: 0,
+          timeout: timeoutSeconds,
+        },
+        (timeoutSeconds + 30) * 1000,
+      );
+      attempts.push({ attempt, status: "success", durationMs: elapsedMs(attemptStarted) });
+      break;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      attempts.push({ attempt, status: "failed", durationMs: elapsedMs(attemptStarted), error: message });
+      console.log(`BENCHMARK ${label} attempt ${attempt} failed after ${attempts.at(-1).durationMs.toFixed(1)}ms`);
+      if (attempt < maxAttempts) await wait(3_000);
+    }
   }
+
+  const successfulAttempt = attempts.find((attempt) => attempt.status === "success");
+  if (!successfulAttempt) {
+    const sample = {
+      phase,
+      label,
+      writeMs,
+      renderMs: null,
+      totalMs: Math.round((writeMs + elapsedMs(allAttemptsStarted)) * 10) / 10,
+      imageName: null,
+      bytes: null,
+      sha256: null,
+      changedFromPrevious: null,
+      attempts,
+      error: attempts.at(-1)?.error ?? "RenderPreview failed without an error message.",
+    };
+    results.samples.push(sample);
+    return sample;
+  }
+
+  const renderMs = successfulAttempt.durationMs;
+  const snapshotPath = findSnapshotPath(response);
+  if (!snapshotPath) throw new Error(`${label} did not return a previewSnapshotPath: ${JSON.stringify(response)}`);
 
   const imageName = `${String(results.samples.length).padStart(2, "0")}-${label}.png`;
   const destination = path.join(outputDirectory, imageName);
   await copyFile(snapshotPath, destination);
   const bytes = await readFile(destination);
   const sha256 = createHash("sha256").update(bytes).digest("hex");
-  const previous = results.samples.at(-1);
+  const previous = [...results.samples].reverse().find((sample) => sample.sha256);
   const changedFromPrevious = previous ? previous.sha256 !== sha256 : null;
 
   const sample = {
@@ -153,23 +201,22 @@ async function render({ phase, label, sourceFilePath, writeMs }) {
     label,
     writeMs,
     renderMs,
-    totalMs: Math.round((writeMs + renderMs) * 10) / 10,
+    totalMs: Math.round((writeMs + elapsedMs(allAttemptsStarted)) * 10) / 10,
     imageName,
     bytes: bytes.length,
     sha256,
     changedFromPrevious,
+    attempts,
   };
+  if (previous && !changedFromPrevious) sample.error = `${label} produced the same PNG bytes as ${previous.label}.`;
   results.samples.push(sample);
-  console.log(`BENCHMARK ${label}: write=${writeMs.toFixed(1)}ms render=${renderMs.toFixed(1)}ms total=${sample.totalMs.toFixed(1)}ms`);
-
-  if (previous && !changedFromPrevious) {
-    throw new Error(`${label} produced the same PNG bytes as ${previous.label}.`);
-  }
+  console.log(`BENCHMARK ${label}: write=${writeMs.toFixed(1)}ms render=${renderMs.toFixed(1)}ms attempts=${attempts.length} total=${sample.totalMs.toFixed(1)}ms`);
   return sample;
 }
 
 function summarize(samples) {
-  const values = samples.map((sample) => sample.renderMs).sort((a, b) => a - b);
+  const values = samples.map((sample) => sample.renderMs).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!values.length) return null;
   const average = values.reduce((sum, value) => sum + value, 0) / values.length;
   const percentile = (fraction) => values[Math.min(values.length - 1, Math.ceil(values.length * fraction) - 1)];
   return {
@@ -192,17 +239,17 @@ function reportMarkdown(errorMessage = null) {
     "",
     "The project, workspace, MCP server, and MCP client stayed alive for every sample.",
     "",
-    "| Phase | Sample | Save (ms) | RenderPreview (ms) | Total (ms) | PNG changed |",
-    "|---|---:|---:|---:|---:|:---:|",
+    "| Phase | Sample | Save (ms) | RenderPreview (ms) | Attempts | Total (ms) | PNG changed |",
+    "|---|---:|---:|---:|---:|---:|:---:|",
     ...results.samples.map((sample) =>
-      `| ${sample.phase} | ${sample.label} | ${sample.writeMs.toFixed(1)} | ${sample.renderMs.toFixed(1)} | ${sample.totalMs.toFixed(1)} | ${sample.changedFromPrevious === null ? "n/a" : sample.changedFromPrevious ? "yes" : "NO"} |`,
+      `| ${sample.phase} | ${sample.label} | ${sample.writeMs.toFixed(1)} | ${Number.isFinite(sample.renderMs) ? sample.renderMs.toFixed(1) : "FAILED"} | ${sample.attempts.length} | ${sample.totalMs.toFixed(1)} | ${sample.changedFromPrevious === null ? "n/a" : sample.changedFromPrevious ? "yes" : "NO"} |`,
     ),
     "",
   ];
 
   if (warm.length) {
     const stats = summarize(warm);
-    lines.push(
+    if (stats) lines.push(
       "## Existing TestView warm renders",
       "",
       `Count: ${stats.count}; min: ${stats.minMs.toFixed(1)} ms; median: ${stats.medianMs.toFixed(1)} ms; average: ${stats.averageMs.toFixed(1)} ms; p95: ${stats.p95Ms.toFixed(1)} ms; max: ${stats.maxMs.toFixed(1)} ms.`,
@@ -212,7 +259,7 @@ function reportMarkdown(errorMessage = null) {
 
   if (newFile.length) {
     const stats = summarize(newFile);
-    lines.push(
+    if (stats) lines.push(
       "## Swift2000.swift renders",
       "",
       `Created during the live workspace session with XcodeWrite in ${results.newFileCreationMs?.toFixed(1) ?? "n/a"} ms.`,
@@ -227,17 +274,19 @@ function reportMarkdown(errorMessage = null) {
 }
 
 function csvText() {
-  const header = "phase,label,write_ms,render_ms,total_ms,image,bytes,sha256,changed_from_previous";
+  const header = "phase,label,write_ms,render_ms,attempts,total_ms,image,bytes,sha256,changed_from_previous,error";
   const rows = results.samples.map((sample) => [
     sample.phase,
     sample.label,
     sample.writeMs,
-    sample.renderMs,
+    sample.renderMs ?? "",
+    sample.attempts.length,
     sample.totalMs,
-    sample.imageName,
-    sample.bytes,
-    sample.sha256,
+    sample.imageName ?? "",
+    sample.bytes ?? "",
+    sample.sha256 ?? "",
     sample.changedFromPrevious ?? "",
+    sample.error ? JSON.stringify(sample.error) : "",
   ].join(","));
   return [header, ...rows, ""].join("\n");
 }
@@ -261,24 +310,17 @@ try {
   results.workspaceIdentifier = opened.workspaceIdentifier ?? projectPath;
 
   let writeMs = await saveDirectly(existingSourcePath, existingSource("Warm-up"));
-  await render({ phase: "cold", label: "cold-warmup", sourceFilePath: existingSourceFilePath, writeMs });
+  const cold = await render({ phase: "cold", label: "cold-warmup", sourceFilePath: existingSourceFilePath, writeMs });
+  if (cold.error) throw new Error(`Cold preview failed: ${cold.error}`);
+  await wait(5_000);
 
   for (let index = 1; index <= 10; index += 1) {
-    writeMs = await saveDirectly(existingSourcePath, existingSource(String(index)));
+    writeMs = await saveThroughXcode(existingSourceFilePath, existingSource(String(index)));
     await render({ phase: "existing-warm", label: `warm-${String(index).padStart(2, "0")}`, sourceFilePath: existingSourceFilePath, writeMs });
+    await wait(500);
   }
 
-  const createStarted = performance.now();
-  await call(
-    "XcodeWrite",
-    {
-      workspaceIdentifier: results.workspaceIdentifier,
-      filePath: newSourceFilePath,
-      content: swift2000Source("Swift 2000"),
-    },
-    60_000,
-  );
-  results.newFileCreationMs = elapsedMs(createStarted);
+  results.newFileCreationMs = await saveThroughXcode(newSourceFilePath, swift2000Source("Swift 2000"));
   await render({
     phase: "new-file",
     label: "swift2000-initial",
@@ -287,18 +329,14 @@ try {
   });
 
   for (let index = 1; index <= 5; index += 1) {
-    const writeStarted = performance.now();
-    await call(
-      "XcodeWrite",
-      {
-        workspaceIdentifier: results.workspaceIdentifier,
-        filePath: newSourceFilePath,
-        content: swift2000Source(`Swift 2000 ${index}`),
-      },
-      60_000,
-    );
-    writeMs = elapsedMs(writeStarted);
+    writeMs = await saveThroughXcode(newSourceFilePath, swift2000Source(`Swift 2000 ${index}`));
     await render({ phase: "new-file", label: `swift2000-${String(index).padStart(2, "0")}`, sourceFilePath: newSourceFilePath, writeMs });
+    await wait(500);
+  }
+
+  const failedSamples = results.samples.filter((sample) => sample.error);
+  if (failedSamples.length) {
+    throw new Error(`${failedSamples.length} benchmark sample(s) failed after all in-session retries: ${failedSamples.map((sample) => sample.label).join(", ")}`);
   }
 } catch (error) {
   failure = error instanceof Error ? error.stack ?? error.message : String(error);
