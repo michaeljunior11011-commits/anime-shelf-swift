@@ -148,9 +148,9 @@ try {
   await writeFile(sourcePath, liveSource, "utf8");
   await writeFile(path.join(outputDirectory, "LiveTest.swift"), liveSource, "utf8");
 
-  await client.connect(transport, { timeout: 30_000 });
+  await client.connect(transport, { timeout: 180_000 });
   connected = true;
-  const { tools } = await client.listTools(undefined, { timeout: 30_000 });
+  const { tools } = await client.listTools(undefined, { timeout: 180_000 });
   results.tools = tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
 
   const opened = await call(client, "XcodeOpenWorkspace", { path: projectPath });

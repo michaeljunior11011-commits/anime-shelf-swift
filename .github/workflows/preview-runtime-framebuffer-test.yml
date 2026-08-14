@@ -53,6 +53,8 @@ jobs:
           echo "PREVIEW_SOURCE_FILE=PreviewLab/TestView.swift" >> "$GITHUB_ENV"
           sudo xcrun mcp-server enable --unsafe-always-allow-all-agents
           xcrun mcp-server start
+          # The first headless bridge connection can race the server's cold startup.
+          sleep 30
 
       - name: Test the live Preview device framebuffer
         shell: bash
