@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: write
   contents: read
 
 jobs:
@@ -14,6 +15,7 @@ jobs:
     env:
       XCODES_USERNAME: ${{ secrets.APPLE_ID }}
       XCODES_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+      OTP_GITHUB_TOKEN: ${{ github.token }}
 
     steps:
       - name: Check out repository
@@ -58,6 +60,18 @@ jobs:
           echo "::add-mask::$XCODES_USERNAME"
           echo "::add-mask::$XCODES_PASSWORD"
 
+      - name: Verify temporary 2FA mailbox access
+        if: steps.inspect.outputs.needs_install == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh variable set APPLE_2FA_CODE --body "MAILBOX_TEST" --repo "$GITHUB_REPOSITORY"
+          value="$(gh variable get APPLE_2FA_CODE --repo "$GITHUB_REPOSITORY")"
+          gh variable delete APPLE_2FA_CODE --repo "$GITHUB_REPOSITORY"
+          [[ "$value" == "MAILBOX_TEST" ]] || { echo "Repository variable mailbox verification failed."; exit 1; }
+
       - name: Download and install Xcode 27 Beta 5
         id: install
         if: steps.inspect.outputs.needs_install == 'true'
@@ -71,6 +85,7 @@ jobs:
           current_log="$output/xcodes-current.log"
           fallback_log="$output/xcodes-1.6.2.log"
 
+          python3 -m pip install --quiet --disable-pip-version-check pexpect
           xcodes update 2>&1 | tee "$output/xcodes-update.log"
           xcodes list 2>&1 | tee "$output/xcodes-list.log"
           if ! grep -Eiq '27(\.0){0,2}[[:space:]]+Beta[[:space:]]+5' "$output/xcodes-list.log"; then
@@ -80,15 +95,17 @@ jobs:
           fi
 
           set +e
-          xcodes install "27.0 Beta 5" \
+          python3 .github/xcode-headless-preview/install-with-2fa.py \
+            "$current_log" \
+            "$(command -v xcodes)" install "27.0 Beta 5" \
             --directory "$install_root" \
-            --experimental-unxip </dev/null 2>&1 | tee "$current_log"
-          install_status=${PIPESTATUS[0]}
+            --experimental-unxip
+          install_status=$?
           set -e
 
           if [[ $install_status -ne 0 ]]; then
-            if grep -Eiq 'Enter .*6 digit|verification code|choose a phone number|security code' "$current_log"; then
-              echo "xcodes requested an interactive Apple two-factor authentication code. The workflow stopped without bypassing it." \
+            if [[ $install_status -eq 90 ]]; then
+              echo "The temporary 2FA mailbox timed out or could not access the repository variable." \
                 | tee "$output/report.md" >> "$GITHUB_STEP_SUMMARY"
               exit 20
             fi
@@ -107,20 +124,17 @@ jobs:
               "$fallback_bin" version | tee -a "$fallback_log"
 
               set +e
-              "$fallback_bin" install "27.0 Beta 5" \
+              python3 .github/xcode-headless-preview/install-with-2fa.py \
+                "$fallback_log" \
+                "$fallback_bin" install "27.0 Beta 5" \
                 --directory "$install_root" \
-                --experimental-unxip </dev/null 2>&1 | tee -a "$fallback_log"
-              fallback_status=${PIPESTATUS[0]}
+                --experimental-unxip
+              fallback_status=$?
               set -e
 
               if [[ $fallback_status -ne 0 ]]; then
-                if grep -Eiq 'Enter .*6 digit|verification code|choose a phone number|security code' "$fallback_log"; then
-                  echo "xcodes 1.6.2 also requested an interactive two-factor authentication code. The workflow stopped." \
-                    | tee -a "$output/report.md" >> "$GITHUB_STEP_SUMMARY"
-                else
-                  echo "xcodes 1.6.2 could not install Xcode Beta 5. See the uploaded fallback log." \
-                    | tee -a "$output/report.md" >> "$GITHUB_STEP_SUMMARY"
-                fi
+                echo "xcodes 1.6.2 could not install Xcode Beta 5. See the uploaded fallback log." \
+                  | tee -a "$output/report.md" >> "$GITHUB_STEP_SUMMARY"
                 exit 21
               fi
             else
