@@ -85,7 +85,8 @@ jobs:
           current_log="$output/xcodes-current.log"
           fallback_log="$output/xcodes-1.6.2.log"
 
-          python3 -m pip install --quiet --disable-pip-version-check pexpect
+          python3 -m venv "$RUNNER_TEMP/otp-venv"
+          "$RUNNER_TEMP/otp-venv/bin/python" -m pip install --quiet --disable-pip-version-check pexpect
           xcodes update 2>&1 | tee "$output/xcodes-update.log"
           xcodes list 2>&1 | tee "$output/xcodes-list.log"
           if ! grep -Eiq '27(\.0){0,2}[[:space:]]+Beta[[:space:]]+5' "$output/xcodes-list.log"; then
@@ -95,7 +96,7 @@ jobs:
           fi
 
           set +e
-          python3 .github/xcode-headless-preview/install-with-2fa.py \
+          "$RUNNER_TEMP/otp-venv/bin/python" .github/xcode-headless-preview/install-with-2fa.py \
             "$current_log" \
             "$(command -v xcodes)" install "27.0 Beta 5" \
             --directory "$install_root" \
@@ -124,7 +125,7 @@ jobs:
               "$fallback_bin" version | tee -a "$fallback_log"
 
               set +e
-              python3 .github/xcode-headless-preview/install-with-2fa.py \
+              "$RUNNER_TEMP/otp-venv/bin/python" .github/xcode-headless-preview/install-with-2fa.py \
                 "$fallback_log" \
                 "$fallback_bin" install "27.0 Beta 5" \
                 --directory "$install_root" \
