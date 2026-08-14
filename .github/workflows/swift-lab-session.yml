@@ -4,20 +4,36 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: write
   contents: write
 
 jobs:
+  verify-2fa-mailbox:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify the temporary 2FA mailbox
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh variable set APPLE_2FA_CODE --body MAILBOX_TEST --repo "$GITHUB_REPOSITORY"
+          [[ "$(gh variable get APPLE_2FA_CODE --repo "$GITHUB_REPOSITORY")" == MAILBOX_TEST ]]
+          gh variable delete APPLE_2FA_CODE --repo "$GITHUB_REPOSITORY"
+
   swift-lab:
+    needs: verify-2fa-mailbox
     runs-on: xcode-27
     timeout-minutes: 350
+    env:
+      XCODES_USERNAME: ${{ secrets.APPLE_ID }}
+      XCODES_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+      OTP_GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Install Xcode 27 Beta 5 once
-        env:
-          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -25,13 +41,22 @@ jobs:
             echo "DEVELOPER_DIR=$(xcode-select -p)" >> "$GITHUB_ENV"
             exit 0
           fi
-          xip="$RUNNER_TEMP/Xcode_27_beta_5.xip"
+          [[ -n "$XCODES_USERNAME" && -n "$XCODES_PASSWORD" ]] || {
+            echo 'APPLE_ID and APPLE_ID_PASSWORD must be configured as Actions secrets.'
+            exit 1
+          }
           root="$RUNNER_TEMP/XcodeBeta5"
           mkdir -p "$root"
-          gh release download xcode-27-beta5-cache --repo "$GITHUB_REPOSITORY" --pattern 'Xcode_27_beta_5.xip' --dir "$RUNNER_TEMP"
-          echo '1f92c0fbb7268205e9b1f8061bf47db012a92e47729557c79ac053c9e5bd881a  '"$xip" | shasum -a 256 --check
-          xcodes install "27.0 Beta 5" --path "$xip" --directory "$root" --experimental-unxip
+          python3 -m venv "$RUNNER_TEMP/otp-venv"
+          "$RUNNER_TEMP/otp-venv/bin/python" -m pip install --quiet --disable-pip-version-check pexpect
+          xcodes update
+          "$RUNNER_TEMP/otp-venv/bin/python" .github/xcode-headless-preview/install-with-2fa.py \
+            "$RUNNER_TEMP/xcodes-install.log" \
+            "$(command -v xcodes)" install "27.0 Beta 5" \
+            --directory "$root" \
+            --experimental-unxip
           app="$(find "$root" -maxdepth 3 -type d -name '*.app' -print -quit)"
+          [[ -n "$app" ]] || { echo 'Xcode installation completed without producing an app.'; exit 1; }
           developer="$app/Contents/Developer"
           sudo xcode-select --switch "$developer"
           echo "DEVELOPER_DIR=$developer" >> "$GITHUB_ENV"
