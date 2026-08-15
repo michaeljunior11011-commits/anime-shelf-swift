@@ -162,7 +162,6 @@ struct HomeView: View {
         .padding(.horizontal, 18)
     }
 }
-
 private struct FeaturedAnimeCard: View {
     let anime: Anime
     let open: () -> Void
