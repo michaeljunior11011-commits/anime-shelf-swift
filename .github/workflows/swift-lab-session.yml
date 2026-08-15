@@ -49,14 +49,15 @@ jobs:
           set -euo pipefail
           command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
           npm ci --prefix .github/xcode-headless-preview
-          project="$GITHUB_WORKSPACE/.github/xcode-headless-preview/fixture"
+          project="$GITHUB_WORKSPACE"
           (cd "$project" && xcodegen generate)
           git config user.name 'Swift Lab'
           git config user.email 'swift-lab@users.noreply.github.com'
           token="$(openssl rand -hex 16)"
           echo "SWIFT_LAB_TOKEN=$token" >> "$GITHUB_ENV"
-          echo "PREVIEW_PROJECT_PATH=$project/PreviewLab.xcodeproj" >> "$GITHUB_ENV"
-          echo "PREVIEW_SOURCE_ROOT=$project/PreviewLab" >> "$GITHUB_ENV"
+          echo "PREVIEW_PROJECT_PATH=$project/AnimeShelf.xcodeproj" >> "$GITHUB_ENV"
+          echo "PREVIEW_SOURCE_ROOT=$project/AnimeShelf" >> "$GITHUB_ENV"
+          echo "PREVIEW_CATALOG_PATH=$project/.github/xcode-headless-preview/anime-shelf-preview-pages.json" >> "$GITHUB_ENV"
           echo "SWIFT_LAB_OUTPUT=$RUNNER_TEMP/swift-lab-output" >> "$GITHUB_ENV"
           sudo xcrun mcp-server enable --unsafe-always-allow-all-agents
           xcrun mcp-server start

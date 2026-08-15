@@ -1,0 +1,7 @@
+{
+  "pages": [
+    { "id": "home", "label": "Home", "source": "HomeView.swift", "preview": "Previews/HomePreview.swift" },
+    { "id": "browse", "label": "Browse", "source": "BrowseView.swift", "preview": "Previews/BrowsePreview.swift" },
+    { "id": "settings", "label": "Settings", "source": "SettingsView.swift", "preview": "Previews/SettingsPreview.swift" }
+  ]
+}

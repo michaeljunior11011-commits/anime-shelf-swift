@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
-import { copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
@@ -12,13 +12,14 @@ const port = Number(process.env.SWIFT_LAB_PORT ?? 8080);
 const token = process.env.SWIFT_LAB_TOKEN;
 const projectPath = path.resolve(process.env.PREVIEW_PROJECT_PATH ?? "");
 const sourceRoot = path.resolve(process.env.PREVIEW_SOURCE_ROOT ?? "");
+const catalogPath = path.resolve(process.env.PREVIEW_CATALOG_PATH ?? "");
 const publicRoot = path.resolve(new URL("./swift-lab-public", import.meta.url).pathname);
 const previewRoot = path.resolve(process.env.SWIFT_LAB_OUTPUT ?? "swift-lab-output");
 const repositoryRoot = process.env.GITHUB_WORKSPACE ? path.resolve(process.env.GITHUB_WORKSPACE) : null;
 const exec = promisify(execFile);
 
-if (!token || !projectPath || !sourceRoot) {
-  throw new Error("SWIFT_LAB_TOKEN, PREVIEW_PROJECT_PATH, and PREVIEW_SOURCE_ROOT are required.");
+if (!token || !projectPath || !sourceRoot || !catalogPath) {
+  throw new Error("SWIFT_LAB_TOKEN, PREVIEW_PROJECT_PATH, PREVIEW_SOURCE_ROOT, and PREVIEW_CATALOG_PATH are required.");
 }
 
 await mkdir(previewRoot, { recursive: true });
@@ -51,6 +52,11 @@ const rawCall = async (name, args, timeout = 90_000) => {
 
 const opened = await rawCall("XcodeOpenWorkspace", { path: projectPath }, 60_000);
 const workspaceIdentifier = opened.workspaceIdentifier ?? projectPath;
+const catalog = JSON.parse(await readFile(catalogPath, "utf8"));
+const pages = Array.isArray(catalog.pages) ? catalog.pages : [];
+if (!pages.length || pages.some((page) => !page?.id || !page?.label || !page?.source || !page?.preview)) {
+  throw new Error("Preview page catalog is invalid.");
+}
 let queue = Promise.resolve();
 let latest = null;
 const renderJobs = new Map();
@@ -61,8 +67,18 @@ function safeName(value) {
   return name;
 }
 
-function sourceFilePath(name) {
-  return `PreviewLab/${safeName(name)}`;
+function sourceFilePath(relativePath) {
+  const normalized = String(relativePath ?? "").replace(/\\/g, "/");
+  if (!/^[A-Za-z][A-Za-z0-9_/-]*\.swift$/.test(normalized) || normalized.includes("..")) {
+    throw new Error("Invalid Swift source path.");
+  }
+  return `AnimeShelf/${normalized}`;
+}
+
+function pageById(id) {
+  const page = pages.find((item) => item.id === String(id ?? ""));
+  if (!page) throw new Error("Unknown preview page.");
+  return page;
 }
 
 async function bodyJson(request) {
@@ -83,7 +99,7 @@ function json(response, status, value) {
 }
 
 async function listFiles() {
-  return (await readdir(sourceRoot)).filter((name) => name.endsWith(".swift")).sort();
+  return pages;
 }
 
 function findSnapshotPath(result) {
@@ -91,13 +107,13 @@ function findSnapshotPath(result) {
   return JSON.stringify(result).match(/(?:\/[^\"]+\.png)/i)?.[0];
 }
 
-async function renderFile(name, content) {
+async function renderFile(id, content) {
   const started = performance.now();
-  const fileName = safeName(name);
-  await rawCall("XcodeWrite", { workspaceIdentifier, filePath: sourceFilePath(fileName), content }, 60_000);
+  const page = pageById(id);
+  await rawCall("XcodeWrite", { workspaceIdentifier, filePath: sourceFilePath(page.source), content }, 60_000);
   const rendered = await rawCall("RenderPreview", {
     workspaceIdentifier,
-    sourceFilePath: sourceFilePath(fileName),
+    sourceFilePath: sourceFilePath(page.preview),
     previewDefinitionIndexInFile: 0,
     timeout: 180,
   }, 220_000);
@@ -110,11 +126,11 @@ async function renderFile(name, content) {
     await exec("git", ["add", "--", sourceRoot], { cwd: repositoryRoot });
     const staged = await exec("git", ["diff", "--cached", "--quiet"], { cwd: repositoryRoot }).then(() => false, () => true);
     if (staged) {
-      await exec("git", ["commit", "-m", `Swift Lab autosave: ${fileName} [skip ci]`], { cwd: repositoryRoot });
+      await exec("git", ["commit", "-m", `Swift Lab autosave: ${page.source} [skip ci]`], { cwd: repositoryRoot });
       await exec("git", ["push", "origin", "HEAD:main"], { cwd: repositoryRoot });
     }
   }
-  latest = { path: destination, version, fileName, elapsedMs: Math.round(performance.now() - started) };
+  latest = { path: destination, version, pageId: page.id, source: page.source, elapsedMs: Math.round(performance.now() - started) };
   return latest;
 }
 
@@ -131,18 +147,23 @@ const server = createServer(async (request, response) => {
       return response.end(html);
     }
     if (request.method === "GET" && route === "/api/state") {
-      return json(response, 200, { files: await listFiles(), latest: latest && { ...latest, path: undefined } });
+      return json(response, 200, { pages: await listFiles(), latest: latest && { ...latest, path: undefined } });
     }
     if (request.method === "GET" && route === "/api/file") {
-      const name = safeName(url.searchParams.get("name"));
-      return json(response, 200, { name, content: await readFile(path.join(sourceRoot, name), "utf8") });
+      const page = pageById(url.searchParams.get("id"));
+      return json(response, 200, {
+        id: page.id,
+        label: page.label,
+        source: page.source,
+        content: await readFile(path.join(sourceRoot, page.source), "utf8"),
+      });
     }
     if (request.method === "POST" && route === "/api/render") {
       const body = await bodyJson(request);
       const jobId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
       const job = { status: "queued", createdAt: Date.now() };
       renderJobs.set(jobId, job);
-      const task = queue.then(() => renderFile(body.name, String(body.content ?? "")));
+      const task = queue.then(() => renderFile(body.id, String(body.content ?? "")));
       queue = task.catch(() => {});
       task.then(
         (result) => Object.assign(job, { status: "complete", elapsedMs: result.elapsedMs, version: result.version }),
