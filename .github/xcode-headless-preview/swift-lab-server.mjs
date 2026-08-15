@@ -110,6 +110,9 @@ function findSnapshotPath(result) {
 async function renderFile(id, content) {
   const started = performance.now();
   const page = pageById(id);
+  // A session can run for hours. Sync before writing so each autosave starts
+  // from the current GitHub branch instead of failing after a later commit.
+  if (repositoryRoot) await exec("git", ["pull", "--rebase", "origin", "main"], { cwd: repositoryRoot });
   await rawCall("XcodeWrite", { workspaceIdentifier, filePath: sourceFilePath(page.source), content }, 60_000);
   const rendered = await rawCall("RenderPreview", {
     workspaceIdentifier,
