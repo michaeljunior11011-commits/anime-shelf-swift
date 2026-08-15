@@ -60,6 +60,11 @@ if (!pages.length || pages.some((page) => !page?.id || !page?.label || !page?.so
 let queue = Promise.resolve();
 let latest = null;
 const renderJobs = new Map();
+const lastKnownGood = new Map();
+
+for (const page of pages) {
+  lastKnownGood.set(page.id, await readFile(path.join(sourceRoot, page.source), "utf8"));
+}
 
 function safeName(value) {
   const name = String(value ?? "");
@@ -110,13 +115,25 @@ function findSnapshotPath(result) {
 async function renderFile(id, content) {
   const started = performance.now();
   const page = pageById(id);
+  if (/\@main\b/.test(content)) {
+    throw new Error("ضع @main مرة واحدة فقط في AnimeShelfApp.swift. ملفات الصفحات مثل HomeView.swift يجب أن تحتوي struct باسم الصفحة: View فقط.");
+  }
+  const previousContent = lastKnownGood.get(page.id);
   await rawCall("XcodeWrite", { workspaceIdentifier, filePath: sourceFilePath(page.source), content }, 60_000);
-  const rendered = await rawCall("RenderPreview", {
-    workspaceIdentifier,
-    sourceFilePath: sourceFilePath(page.preview),
-    previewDefinitionIndexInFile: 0,
-    timeout: 180,
-  }, 220_000);
+  let rendered;
+  try {
+    rendered = await rawCall("RenderPreview", {
+      workspaceIdentifier,
+      sourceFilePath: sourceFilePath(page.preview),
+      previewDefinitionIndexInFile: 0,
+      timeout: 180,
+    }, 220_000);
+  } catch (error) {
+    if (previousContent != null) {
+      await rawCall("XcodeWrite", { workspaceIdentifier, filePath: sourceFilePath(page.source), content: previousContent }, 60_000).catch(() => {});
+    }
+    throw error;
+  }
   const snapshotPath = findSnapshotPath(rendered);
   if (!snapshotPath) throw new Error("لم يرجع Xcode صورة Preview");
   const version = Date.now();
@@ -131,6 +148,7 @@ async function renderFile(id, content) {
     }
   }
   latest = { path: destination, version, pageId: page.id, source: page.source, elapsedMs: Math.round(performance.now() - started) };
+  lastKnownGood.set(page.id, content);
   return latest;
 }
 
