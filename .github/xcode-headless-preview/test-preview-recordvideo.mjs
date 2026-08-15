@@ -17,6 +17,14 @@ function decode(result) { if (result?.structuredContent) return result.structure
 async function call(client, name, args, timeout) { const raw = await client.request({ method: "tools/call", params: { name, arguments: args } }, CompatibilityCallToolResultSchema, { timeout, resetTimeoutOnProgress: true }); const value = decode(raw); if (raw.isError) throw new Error(`${name}: ${JSON.stringify(value)}`); return value; }
 function exec(command, args) { return new Promise((resolve) => { const child = spawn(command, args, { env: process.env }); let stdout = ""; let stderr = ""; child.stdout.on("data", (c) => stdout += c); child.stderr.on("data", (c) => stderr += c); child.on("close", (code, signal) => resolve({ command, args, code, signal, stdout, stderr })); }); }
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+async function stopRecording(child, stdout, stderr) {
+  const closed = new Promise((resolve) => child.once("close", (code, signal) => resolve({ code, signal, stdout, stderr })));
+  child.kill("SIGINT");
+  const graceful = await Promise.race([closed, sleep(10_000).then(() => null)]);
+  if (graceful) return graceful;
+  child.kill("SIGKILL");
+  return await Promise.race([closed, sleep(3_000).then(() => ({ code: null, signal: "recordVideo did not exit after SIGKILL", stdout, stderr }))]);
+}
 function sceneScreens(output) {
   const blocks = output.split(/\n\s{4}\(/).map((block) => `    (${block}`);
   return blocks.flatMap((block) => {
@@ -67,8 +75,7 @@ try {
     sleep(42_000).then(() => ({ status: "pending-after-60-second-observation" })),
   ]);
   await sleep(5000); await progressiveProbe(videoPath); await enumerate(udid, "recording-after-preview-update");
-  recording.kill("SIGINT");
-  results.recording = await new Promise((resolve) => recording.on("close", (code, signal) => resolve({ code, signal, stdout: recordStdout, stderr: recordStderr })));
+  results.recording = await stopRecording(recording, recordStdout, recordStderr);
   results.finalProbe = await exec("ffprobe", ["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=width,height,avg_frame_rate,r_frame_rate,nb_read_frames,duration", "-of", "json", videoPath]);
   results.beforeFrame = await exec("ffmpeg", ["-y", "-ss", "1", "-i", videoPath, "-frames:v", "1", path.join(outputDirectory, "before-update.png")]);
   results.afterFrame = await exec("ffmpeg", ["-y", "-sseof", "-2", "-i", videoPath, "-frames:v", "1", path.join(outputDirectory, "after-update.png")]);
@@ -76,7 +83,7 @@ try {
 } catch (error) {
   results.verdict = "TEST_FAILED"; results.error = error instanceof Error ? error.stack ?? error.message : String(error); process.exitCode = 1;
 } finally {
-  if (recording && !recording.killed) recording.kill("SIGINT");
+  if (recording && recording.exitCode === null) recording.kill("SIGKILL");
   results.finishedAt = new Date().toISOString(); await writeFile(path.join(outputDirectory, "test-results.json"), JSON.stringify(results, null, 2), "utf8");
-  if (client) await client.close();
+  if (client) await Promise.race([client.close(), sleep(10_000)]);
 }
