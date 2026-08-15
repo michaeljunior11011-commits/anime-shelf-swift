@@ -8,6 +8,7 @@ struct HomeView: View {
     @State private var selectedAnime: Anime?
 
     var body: some View {
+
         NavigationStack {
             ZStack {
                 AppBackdrop()
